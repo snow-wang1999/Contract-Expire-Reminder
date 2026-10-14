@@ -11,10 +11,15 @@ DATA_DIR = os.environ.get("REMINDER_DATA_DIR",
 
 TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates")
 
-with open(os.path.join(TEMPLATE_DIR, "email.html"), encoding="utf-8") as _f:
-    DEFAULT_BODY = _f.read()
-with open(os.path.join(TEMPLATE_DIR, "email_en.html"), encoding="utf-8") as _f:
-    DEFAULT_BODY_EN = _f.read()
+def _template(name):
+    with open(os.path.join(TEMPLATE_DIR, name), encoding="utf-8") as f:
+        return f.read()
+
+
+DEFAULT_BODY = _template("email.html")
+DEFAULT_BODY_EN = _template("email_en.html")
+DEFAULT_BODY_CHANNEL = _template("email_channel.html")
+DEFAULT_BODY_CHANNEL_EN = _template("email_channel_en.html")
 
 DEFAULT_SETTINGS = {
     # outlook：本机 Outlook 发送（支持定时和日历邀请）；smtp：SMTP 服务器；dryrun：只记录不发送
@@ -28,6 +33,11 @@ DEFAULT_SETTINGS = {
     "subject_template_en": "{customer} | {amount_fmt} Warranty Expiry | Renewal Reminder",
     "body_template_en": DEFAULT_BODY_EN,
     "calendar_subject_template_en": "[Warranty Expiry] {customer} | {amount_fmt} | {service_type}",
+    # 渠道续保通知（发给签约客户/二代，不含内部信息和金额）
+    "subject_template_channel": "{customer} | 华为维保续保通知 | 到期日 {expiry}",
+    "body_template_channel": DEFAULT_BODY_CHANNEL,
+    "subject_template_channel_en": "{customer} | Huawei Maintenance Renewal Notice | Expiry {expiry}",
+    "body_template_channel_en": DEFAULT_BODY_CHANNEL_EN,
     "smtp": {"host": "", "port": 465, "ssl": True, "starttls": False,
              "username": "", "password": "", "sender": ""},
 }
@@ -62,9 +72,9 @@ def load_settings():
     saved = _read_json("settings.json", {})
     settings = {**DEFAULT_SETTINGS, **saved}
     settings["smtp"] = {**DEFAULT_SETTINGS["smtp"], **saved.get("smtp", {})}
-    for key in ("subject_template", "body_template", "calendar_subject_template",
-                "subject_template_en", "body_template_en", "calendar_subject_template_en"):
-        settings[key] = settings.get(key) or DEFAULT_SETTINGS[key]   # 留空表示使用默认模板
+    for key in DEFAULT_SETTINGS:
+        if "_template" in key:
+            settings[key] = settings.get(key) or DEFAULT_SETTINGS[key]   # 留空表示使用默认模板
     return settings
 
 
@@ -79,17 +89,25 @@ def save_settings(values):
 
 
 def load_recipients():
-    """记住每个最终客户上次填写的邮箱名单和邮件语言：{"customer": {客户: "a;b"}, "lang": {客户: "en"}}"""
+    """记住上次填写的邮箱名单和邮件语言。
+    客户通知按最终客户记：customer / lang；渠道通知按“签约客户|二代”记：channel / channel_lang。"""
     data = _read_json("recipients.json", {})
-    return {"customer": data.get("customer", {}), "lang": data.get("lang", {})}
+    return {k: data.get(k, {}) for k in ("customer", "lang", "channel", "channel_lang")}
+
+
+def memory_key(record):
+    if record.get("mode") == "channel":
+        return "channel", f"{record.get('signer', '')}|{record.get('tier2', '')}"
+    return "customer", record.get("customer", "")
 
 
 def remember_recipients(records):
     data = load_recipients()
     for r in records:
-        if r.get("customer") and r.get("emails"):
-            data["customer"][r["customer"]] = ";".join(r["emails"])
-            data["lang"][r["customer"]] = r.get("lang", "zh")
+        kind, key = memory_key(r)
+        if key.strip("|") and r.get("emails"):
+            data[kind][key] = ";".join(r["emails"])
+            data["lang" if kind == "customer" else "channel_lang"][key] = r.get("lang", "zh")
     with _lock:
         _write_json("recipients.json", data)
     return data

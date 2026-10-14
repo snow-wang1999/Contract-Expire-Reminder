@@ -62,17 +62,20 @@ def import_raw():
                    "include_eos": form.get("include_eos") == "true",
                    "include_no_expand": form.get("include_no_expand") == "true",
                    "include_dc_energy": form.get("include_dc_energy") == "true",
-                   "min_amount": float(form.get("min_amount") or raw.DEFAULT_OPTIONS["min_amount"])}
+                   "min_amount": float(form.get("min_amount") or raw.DEFAULT_OPTIONS["min_amount"]),
+                   "mode": form.get("mode") or "customer",
+                   "channel_non_key_only": form.get("channel_non_key_only", "true") == "true"}
         records, funnel, excluded, warnings = raw.transform(rows, options)
     except Exception as e:
         return _bad_request(f"原始数据处理失败：{e}")
 
-    # 按客户带出上次填写的邮箱名单
+    # 带出上次填写的邮箱名单和语言（客户通知按最终客户，渠道通知按签约客户+二代）
     memory = store.load_recipients()
     for r in records:
-        if r["customer"] in memory["customer"]:
-            r["emails"] = parser.split_emails(memory["customer"][r["customer"]])
-            r["lang"] = memory["lang"].get(r["customer"], "zh")
+        kind, key = store.memory_key(r)
+        if key in memory[kind]:
+            r["emails"] = parser.split_emails(memory[kind][key])
+            r["lang"] = memory["lang" if kind == "customer" else "channel_lang"].get(key, r["lang"])
 
     _last_import.clear()
     _last_import.update(records=records, excluded=excluded, funnel=funnel)
@@ -86,10 +89,11 @@ def download_template():
         return _bad_request("请先导入原始数据")
     period = _last_import["funnel"]["period"]
     content = workbook.build(_last_import["records"], _last_import["excluded"], _last_import["funnel"])
-    name = f"过保提醒名单_待填写_{period['start']}_{period['end']}.xlsx"
+    kind = "渠道" if period.get("mode") == "channel" else "客户"
+    name = f"过保提醒名单_{kind}_待填写_{period['start']}_{period['end']}.xlsx"
     resp = send_file(io.BytesIO(content), as_attachment=True, download_name=name,
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    resp.headers["Content-Disposition"] = (f"attachment; filename=\"reminder_list_{period['start']}_{period['end']}.xlsx\"; "
+    resp.headers["Content-Disposition"] = (f"attachment; filename=\"reminder_list_{period.get('mode', 'customer')}_{period['start']}_{period['end']}.xlsx\"; "
                                            f"filename*=UTF-8''{urllib.parse.quote(name)}")
     return resp
 
@@ -192,4 +196,9 @@ if __name__ == "__main__":
     if not os.environ.get("NO_BROWSER"):
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     # 只监听本机，避免同网段其他人访问到发信接口
-    app.run(host="127.0.0.1", port=port, debug=False)
+    try:
+        from waitress import serve   # 正式的 WSGI 服务器（纯 Python，随离线包附带）
+    except ImportError:
+        app.run(host="127.0.0.1", port=port, debug=False)
+    else:
+        serve(app, host="127.0.0.1", port=port, threads=4, _quiet=True)

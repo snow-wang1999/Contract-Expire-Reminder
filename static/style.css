@@ -2,13 +2,13 @@
   --bg: #f5f6f8; --surface: #fff; --text: #1f2328; --muted: #6b7280; --border: #e3e6ea;
   --accent: #2563eb; --accent-ink: #fff; --bar: #3b82f6;
   --ok: #15803d; --err: #b91c1c; --warn: #b45309;
-  --expired-bg: #fde2e2; --urgent-bg: #fde8d4; --soon-bg: #fdf3c7; --mid-bg: #e0ecff;
+  --expired-bg: #fde2e2; --urgent-bg: #fde8d4; --soon-bg: #fdf3c7; --mid-bg: #e0ecff; --band: #f1f5fb;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #15171a; --surface: #1e2125; --text: #e6e8eb; --muted: #9aa1a9; --border: #30353b;
     --accent: #4f8cff; --bar: #4f8cff; --ok: #4ade80; --err: #f87171; --warn: #fbbf24;
-    --expired-bg: #4a1d1d; --urgent-bg: #4a2e14; --soon-bg: #423813; --mid-bg: #1d2f4f;
+    --expired-bg: #4a1d1d; --urgent-bg: #4a2e14; --soon-bg: #423813; --mid-bg: #1d2f4f; --band: #23272d;
   }
 }
 * { box-sizing: border-box; }
@@ -76,6 +76,7 @@ table.bars td { padding: 3px 4px; }
 .a-now { background: var(--urgent-bg); }
 .a-defer { background: var(--mid-bg); }
 tr.dim td { opacity: .55; }
+tr.band td { background: var(--band); }
 dialog { max-width: 720px; width: 90vw; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--text); }
 dialog pre { white-space: pre-wrap; background: var(--bg); padding: 12px; border-radius: 6px; font-family: inherit; }
 @media print { .noprint, .topbar, .tabs, .toolbar button { display: none; } }

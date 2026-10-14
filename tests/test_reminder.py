@@ -4,7 +4,7 @@ import io
 import openpyxl
 import pytest
 
-from reminder import analysis, parser, planner, raw, store, workbook
+from reminder import analysis, ordering, parser, planner, raw, store, workbook
 
 
 def make_xlsx(rows):
@@ -17,12 +17,14 @@ def make_xlsx(rows):
 
 
 RAW_HEADER = ["续保单ID", "最终客户名称", "当前合同号", "合同名称", "存量地区部", "存量代表处", "续保产品名称",
-              "EOS时间", "服务结束", "资产状态", "产品线LV1", "服务类型", "目录价"]
+              "EOS时间", "服务结束", "资产状态", "产品线LV1", "服务类型", "目录价", "客户分类", "签约客户名称", "二代名称"]
 
 
 def raw_row(contract, end, stype="Hi-Care", price=30000, eos="2035-12-31", status="使用中", lv1="数据通信",
-            customer="客户A", office="南非代表处", name="合同A", product="S5731"):
-    return [None, customer, contract, name, "南部非洲地区部", office, product, eos, end, status, lv1, stype, price]
+            customer="客户A", office="南非代表处", name="合同A", product="S5731", cls="Value Account",
+            signer="总代A", tier2=""):
+    return [None, customer, contract, name, "南部非洲地区部", office, product, eos, end, status, lv1, stype, price,
+            cls, signer, tier2]
 
 
 RAW_ROWS = [
@@ -76,7 +78,7 @@ def test_workbook_roundtrip():
     wb = openpyxl.load_workbook(io.BytesIO(workbook.build(records, excluded, funnel)))
     assert wb.sheetnames == ["提醒名单", "填写说明", "产品明细", "已排除", "筛选条件"]
     sheet = wb["提醒名单"]
-    sheet.cell(3, workbook.EMAIL_COL).value = "b@x.com；c@x.com"
+    sheet.cell(3, workbook.column_index("customer", "邮箱名单")).value = "b@x.com；c@x.com"
     buf = io.BytesIO()
     wb.save(buf)
     parsed, warnings = parser.parse_file("filled.xlsx", buf.getvalue())
@@ -188,7 +190,7 @@ def test_end_to_end_dryrun(client):
     assert template.status_code == 200
     wb = openpyxl.load_workbook(io.BytesIO(template.data))
     for row in range(2, wb["提醒名单"].max_row + 1):
-        wb["提醒名单"].cell(row, workbook.EMAIL_COL).value = "a@x.com"
+        wb["提醒名单"].cell(row, workbook.column_index("customer", "邮箱名单")).value = "a@x.com"
     buf = io.BytesIO()
     wb.save(buf)
     filled = client.post("/api/upload", data={"file": (io.BytesIO(buf.getvalue()), "filled.xlsx")}).get_json()
@@ -244,3 +246,53 @@ def test_office_en():
     assert planner.office_en("南非代表处") == "South Africa Representative Office"
     assert planner.office_en("东非多国管理部") == "East Africa Multi-Country Management Dept."
     assert planner.office_en("火星代表处") == "火星代表处"
+
+
+def test_customer_mode_orders_by_class_and_keeps_customer_together():
+    rows = [RAW_HEADER,
+            raw_row("V1", "2027-02-01", customer="Val", cls="Value Account", price=90000),
+            raw_row("S1", "2027-09-01", customer="Strat", cls="Strategic Account"),
+            raw_row("N1", "2027-01-15", customer="NoClass", cls=None),
+            raw_row("S2", "2027-03-01", customer="Strat", cls="Strategic Account"),
+            raw_row("C1", "2027-05-01", customer="CoreCo", cls="Core Account")]
+    records, _, _, _ = raw.transform(rows, {}, today=TODAY)
+    assert [r["contract_no"] for r in records] == ["S2", "S1", "C1", "V1", "N1"]
+    assert records[0]["customer_class"] == "Strategic Account" and records[0]["mode"] == "customer"
+    assert ordering.class_rank("卓越客户") < ordering.class_rank("Strategic Account") < ordering.class_rank("Small&Medium Account")
+
+
+def test_channel_mode_filters_key_accounts_and_groups_by_signer():
+    rows = [RAW_HEADER,
+            raw_row("K1", "2027-02-01", cls="Strategic Account", signer="Big Dist"),
+            raw_row("A1", "2027-02-01", customer="X", signer="Small Dist", tier2="Reseller B", price=21000),
+            raw_row("A2", "2027-03-01", customer="Y", signer="Big Dist", tier2="Reseller A", price=50000),
+            raw_row("A3", "2027-04-01", customer="Z", signer="Small Dist", tier2="", price=22000),
+            raw_row("A4", "2027-01-01", customer="W", signer="Big Dist", tier2="Reseller A", cls=None, price=25000)]
+    records, funnel, excluded, _ = raw.transform(rows, {"mode": "channel"}, today=TODAY)
+    assert funnel["key_account"] == 1 and {e["contract_no"] for e in excluded} == {"K1"}
+    assert [(r["signer"], r["tier2"], r["contract_no"]) for r in records] == [
+        ("Big Dist", "Reseller A", "A2"), ("Big Dist", "Reseller A", "A4"),
+        ("Small Dist", "", "A3"), ("Small Dist", "Reseller B", "A1")]
+    assert all(r["mode"] == "channel" and r["lang"] == "en" for r in records)
+
+    all_records, _, _, _ = raw.transform(rows, {"mode": "channel", "channel_non_key_only": False}, today=TODAY)
+    assert "K1" in {r["contract_no"] for r in all_records}
+
+    # 待填写名单：签约客户、二代在最前，通知模式一列回读
+    wb = openpyxl.load_workbook(io.BytesIO(workbook.build(records, excluded, funnel)))
+    header = [c.value for c in wb["提醒名单"][1]]
+    assert header[:2] == ["签约客户", "二代"] and "客户分类" in header and header[-1] == "通知模式"
+    wb["提醒名单"].cell(2, workbook.column_index("channel", "邮箱名单")).value = "p@dist.com"
+    wb.active = wb.sheetnames.index("填写说明")     # 停在说明页保存也要能读
+    buf = io.BytesIO()
+    wb.save(buf)
+    parsed, _ = parser.parse_file("filled.xlsx", buf.getvalue())
+    assert [r["contract_no"] for r in parsed] == ["A2", "A4", "A3", "A1"]
+    first = parsed[0]
+    assert first["mode"] == "channel" and first["lang"] == "en" and first["signer"] == "Big Dist"
+    assert first["tier2"] == "Reseller A" and first["emails"] == ["p@dist.com"]
+
+    item = by_node(planner.plan([first], SETTINGS, set(), None, NOW))[("email", "m3")]
+    assert item["subject"] == "Y | Huawei Maintenance Renewal Notice | Expiry 2027-03-01"
+    assert "Dear Reseller A," in item["body"] and "$5.0W" not in item["body"] and "00621410" not in item["body"]
+    assert item["keys"] == ["A2|2027-03-01|Hi-Care|channel|m3"]

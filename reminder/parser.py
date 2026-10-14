@@ -22,6 +22,10 @@ COLUMN_ALIASES = {
     "remind_days": ["提醒天数", "提前提醒天数"],
     "emails": ["邮箱名单", "邮箱", "收件人", "邮件名单"],
     "lang": ["邮件语言", "语言", "Language"],
+    "customer_class": ["客户分类"],
+    "signer": ["签约客户", "签约客户名称", "总代"],
+    "tier2": ["二代", "二代名称"],
+    "mode": ["通知模式"],
     "product_lines": ["产品明细（型号×报价项数量）", "产品明细(型号×报价项数量)", "产品明细", "产品型号"],
 }
 
@@ -134,7 +138,9 @@ def read_rows(filename, content):
         return [row for row in csv.reader(io.StringIO(text))]
     if name.endswith((".xlsx", ".xlsm")):
         wb = openpyxl.load_workbook(io.BytesIO(content), data_only=True, read_only=True)
-        rows = [list(r) for r in wb.active.iter_rows(values_only=True)]
+        # 待填写名单保存时可能停在“填写说明”页，优先读“提醒名单”工作表
+        ws = wb["提醒名单"] if "提醒名单" in wb.sheetnames else wb.active
+        rows = [list(r) for r in ws.iter_rows(values_only=True)]
         wb.close()
         return rows
     raise ValueError("仅支持 .xlsx / .xlsm / .csv 文件（.xls 请先另存为 .xlsx）")
@@ -186,6 +192,10 @@ def parse_rows(rows):
             "remind_days": parse_int(cell(row, "remind_days")),
             "emails": split_emails(cell(row, "emails")),
             "lang": parse_lang(cell(row, "lang")),
+            "customer_class": _text(cell(row, "customer_class")),
+            "signer": _text(cell(row, "signer")),
+            "tier2": _text(cell(row, "tier2")),
+            "mode": "channel" if "渠道" in _text(cell(row, "mode")) else "customer",
             "product_lines": [p.strip() for p in PRODUCT_SEPARATORS.split(_text(cell(row, "product_lines"))) if p.strip()],
         })
     return records, warnings

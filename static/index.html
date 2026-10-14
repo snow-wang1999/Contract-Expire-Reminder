@@ -25,6 +25,13 @@
   <!-- ① 导入原始数据 -->
   <section id="tab-import" class="tab active">
     <div class="card form">
+      <h2>通知模式</h2>
+      <div class="options">
+        <label class="check"><input type="radio" name="mode" value="customer" checked> 客户通知（发给负责该客户的同事，默认中文）</label>
+        <label class="check"><input type="radio" name="mode" value="channel"> 渠道续保通知（发给签约客户 / 二代，默认英文）</label>
+      </div>
+      <label class="check" id="channelOpt"><input type="checkbox" id="optNonKey" checked> 只包含非卓越 / 战略 / 核心客户（卓战核客户走客户通知）</label>
+      <p class="muted small" id="modeHint"></p>
       <h2>筛选参数</h2>
       <div class="grid">
         <label>过保时间从<input type="date" id="optStart"></label>
@@ -152,6 +159,15 @@
         <label>邮件标题<input type="text" name="subject_template_en"></label>
         <label>日历邀请标题<input type="text" name="calendar_subject_template_en"></label>
         <label>邮件正文（HTML）<textarea name="body_template_en" rows="12"></textarea></label>
+      </details>
+      <details><summary><b>渠道续保通知 · 英文版（默认）</b></summary>
+        <p class="muted small">发给签约客户 / 二代，默认不含金额和内部联系人、内部链接。额外占位符：{partner_name}（二代，没有时为签约客户）{signer} {tier2} {customer_class}</p>
+        <label>邮件标题<input type="text" name="subject_template_channel_en"></label>
+        <label>邮件正文（HTML）<textarea name="body_template_channel_en" rows="12"></textarea></label>
+      </details>
+      <details><summary><b>渠道续保通知 · 中文版</b></summary>
+        <label>邮件标题<input type="text" name="subject_template_channel"></label>
+        <label>邮件正文（HTML）<textarea name="body_template_channel" rows="12"></textarea></label>
       </details>
 
       <fieldset>

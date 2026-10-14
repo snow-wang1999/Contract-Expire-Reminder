@@ -63,7 +63,9 @@ def fill(template, fields, escape=False, raw_html=None):
 
 
 def base_key(record):
-    return f"{record['contract_no']}|{record['expiry']}|{record['service_type']}"
+    key = f"{record['contract_no']}|{record['expiry']}|{record['service_type']}"
+    # 渠道通知与客户通知互不影响，同一合同两种通知可以都发
+    return key + "|channel" if record.get("mode") == "channel" else key
 
 
 # 英文邮件里代表处名称的翻译；未收录的国家保留原文
@@ -116,6 +118,10 @@ def fields_for(record, node, ref_date, lang):
         "node_label": NODE_TEXT[node][lang],
         "days_left": (expiry - ref_date).days,
         "days_text": days_text((expiry - ref_date).days, lang),
+        "customer_class": record.get("customer_class", ""),
+        "signer": record.get("signer", ""),
+        "tier2": record.get("tier2", ""),
+        "partner_name": record.get("tier2") or record.get("signer") or ("Partner" if lang == "en" else "合作伙伴"),
     }
 
 
@@ -158,19 +164,24 @@ def plan(records, settings, sent, options=None, now=None):
         expiry = dt.date.fromisoformat(record["expiry"])
         to = record.get("emails") or []
         lang = "en" if record.get("lang") == "en" else "zh"
+        channel = record.get("mode") == "channel"
         suffix = "_en" if lang == "en" else ""
+        body_key = ("body_template_channel" if channel else "body_template") + suffix
+        subject_key = ("subject_template_channel" if channel else "subject_template") + suffix
         base = base_key(record)
         common = {"id": record["id"], "contract_no": record["contract_no"], "customer": record.get("customer", ""),
                   "office": record.get("office", ""), "expiry": record["expiry"],
                   "service_type": record.get("service_type", ""), "amount": record.get("amount"),
-                  "to": to, "cc": cc, "lang": lang}
+                  "to": to, "cc": cc, "lang": lang, "mode": "channel" if channel else "customer",
+                  "customer_class": record.get("customer_class", ""), "signer": record.get("signer", ""),
+                  "tier2": record.get("tier2", "")}
 
         def add(kind, node, keys, action, reason, date, send_at=None, label_node=None):
             ref = date if action == "defer" else today
             f = fields_for(record, label_node or node, ref, lang)
             if kind == "email":
-                subject = fill(settings["subject_template" + suffix], f)
-                body = fill(settings["body_template" + suffix], f, escape=True,
+                subject = fill(settings[subject_key], f)
+                body = fill(settings[body_key], f, escape=True,
                             raw_html={"products": products_html(record)})
             else:
                 subject = fill(settings["calendar_subject_template" + suffix], f)

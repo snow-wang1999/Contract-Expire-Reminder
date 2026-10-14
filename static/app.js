@@ -60,6 +60,8 @@ async function importRaw(file) {
   fd.append("include_eos", $("#optEos").checked);
   fd.append("include_no_expand", $("#optNoExpand").checked);
   fd.append("include_dc_energy", $("#optDc").checked);
+  fd.append("mode", currentMode());
+  fd.append("channel_non_key_only", $("#optNonKey").checked);
   $("#rawResult").innerHTML = `<p class="muted">正在处理 ${esc(file.name)} …</p>`;
   try {
     const data = await api("/api/raw", fd);
@@ -80,19 +82,43 @@ async function importRaw(file) {
 }
 setupDrop("#rawDrop", "#rawInput", importRaw);
 
+function currentMode() {
+  return document.querySelector("input[name=mode]:checked").value;
+}
+
+function updateModeUi() {
+  const channel = currentMode() === "channel";
+  $("#channelOpt").hidden = !channel;
+  $("#modeHint").textContent = channel
+    ? "按签约客户、二代分组排列，收件人填写总代或二代的联系人；邮件不含金额和内部信息，默认英文。"
+    : "按客户分类（卓越 > 战略 > 核心 > 价值 > 中小）排列，同一客户相邻；默认中文。";
+}
+document.querySelectorAll("input[name=mode]").forEach((r) => r.addEventListener("change", updateModeUi));
+updateModeUi();
+
+const isChannel = () => state.records.some((r) => r.mode === "channel");
+const groupOf = (r) => (r.mode === "channel" ? `${r.signer}|${r.tier2}` : r.customer);
+
+// 同一组（客户 / 签约客户+二代）相同底色
+function bandClasses(records) {
+  let band = false, last;
+  return records.map((r) => { if (groupOf(r) !== last) { band = !band; last = groupOf(r); } return band ? "band" : ""; });
+}
+
 function funnelHtml(f) {
   const rows = [
-    ["原始数据行数", f.rows, ""],
+    ["原始数据行数", f.rows, "", true],
     ["过保时间不在时间段内", -f.out_of_period, ""],
     ["已 EOS 设备", -f.eos, f.period.include_eos ? "（已选择包含）" : ""],
     ["资产状态为不再拓展", -f.no_expand, f.period.include_no_expand ? "（已选择包含）" : ""],
     ["数据中心能源及关键供电", -f.dc_energy, f.period.include_dc_energy ? "（已选择包含）" : ""],
+    ["卓越 / 战略 / 核心客户", -(f.key_account || 0), ""],
     ["缺少合同号或日期", -f.bad_row, ""],
-    ["按 合同号+过保时间+服务类型 合并后", f.groups, "条"],
+    ["按 合同号+过保时间+服务类型 合并后", f.groups, "条", true],
     [`合计目录价未超过 ${money(f.period.min_amount)}`, -f.below_min, ""],
-    ["最终需要提醒", f.records, "条"],
+    ["最终需要提醒", f.records, "条", true],
   ];
-  return `<table class="data funnel"><tbody>${rows.filter(([, v], i) => i === 0 || i >= 6 || v !== 0).map(([k, v, note]) =>
+  return `<table class="data funnel"><tbody>${rows.filter(([, v, , always]) => always || v !== 0).map(([k, v, note]) =>
     `<tr class="${k.startsWith("最终") ? "strong" : ""}"><td>${esc(k)}</td><td class="num">${v < 0 ? `−${-v}` : v}</td><td class="muted">${esc(note)}</td></tr>`).join("")}</tbody></table>`;
 }
 
@@ -111,8 +137,14 @@ function groupTable(rows, title = "名称") {
     </tbody></table>`;
 }
 
+function detailHead() {
+  return `<tr>${isChannel() ? "<th>签约客户</th><th>二代</th>" : ""}<th>代表处</th><th>客户分类</th><th>最终客户</th><th>合同名称</th><th>过保时间</th><th>维保类型</th><th>合同号</th><th class="num">金额</th><th>邮箱名单</th></tr>`;
+}
+
 function detailRows(records) {
-  return records.map((r) => `<tr><td>${esc(r.office)}</td><td>${esc(r.customer)}</td><td>${esc(r.contract_name)}</td>
+  const bands = bandClasses(records), channel = isChannel();
+  return records.map((r, i) => `<tr class="${bands[i]}">${channel ? `<td>${esc(r.signer)}</td><td>${esc(r.tier2)}</td>` : ""}
+    <td>${esc(r.office)}</td><td class="small">${esc(r.customer_class)}</td><td>${esc(r.customer)}</td><td>${esc(r.contract_name)}</td>
     <td class="nowrap">${esc(r.expiry)}</td><td>${esc(r.service_type)}</td><td class="nowrap">${esc(r.contract_no)}</td><td class="num">${money(r.amount)}</td>
     <td class="small">${r.emails.length ? esc(r.emails.join("; ")) : '<span class="muted">待填写</span>'}</td></tr>`).join("");
 }
@@ -135,16 +167,20 @@ function renderReport() {
       <div class="card"><h2>按维保类型</h2>${bars(rp.by_type)}</div>
     </div>
     <div class="cols">
+      <div class="card"><h2>按客户分类</h2>${bars(rp.by_class)}</div>
       <div class="card"><h2>按代表处</h2>${groupTable(rp.by_office, "代表处")}</div>
+    </div>
+    <div class="cols">
+      ${rp.by_signer.length ? `<div class="card"><h2>按签约客户（总代）</h2>${groupTable(rp.by_signer, "签约客户")}</div>` : ""}
       <div class="card"><h2>目录价前 10 客户</h2>${groupTable(rp.by_customer, "最终客户")}</div>
     </div>
-    <div class="card"><h2>提醒名单（过保目录价 &gt; ${money(state.funnel?.period.min_amount ?? 20000)}）</h2>
-      <div class="toolbar noprint"><input type="search" id="detailFilter" placeholder="搜索客户 / 合同 / 代表处"></div>
-      <table class="data"><thead><tr><th>代表处</th><th>最终客户</th><th>合同名称</th><th>过保时间</th><th>维保类型</th><th>合同号</th><th class="num">金额</th><th>邮箱名单</th></tr></thead>
+    <div class="card"><h2>${isChannel() ? "渠道续保通知名单" : "提醒名单"}（过保目录价 &gt; ${money(state.funnel?.period.min_amount ?? 20000)}）</h2>
+      <div class="toolbar noprint"><input type="search" id="detailFilter" placeholder="搜索客户 / 签约客户 / 合同 / 代表处"></div>
+      <table class="data"><thead>${detailHead()}</thead>
       <tbody id="detailBody">${detailRows(rp.records)}</tbody></table></div>`;
   $("#detailFilter").addEventListener("input", (e) => {
     const q = e.target.value.trim().toLowerCase();
-    $("#detailBody").innerHTML = detailRows(rp.records.filter((r) => !q || [r.customer, r.contract_name, r.contract_no, r.office].join(" ").toLowerCase().includes(q)));
+    $("#detailBody").innerHTML = detailRows(rp.records.filter((r) => !q || [r.customer, r.contract_name, r.contract_no, r.office, r.signer, r.tier2].join(" ").toLowerCase().includes(q)));
   });
 }
 
@@ -187,9 +223,10 @@ async function uploadFilled(file) {
 setupDrop("#fillDrop", "#fillInput", uploadFilled);
 
 function renderFillTable() {
-  $("#fillTable").innerHTML = `<p class="muted small">可以在下表直接修改邮箱名单和邮件语言（只对本次发送生效）。</p>
-    <table class="data"><thead><tr><th>合同号</th><th>最终客户</th><th>过保时间</th><th>维保类型</th><th class="num">金额</th><th>产品型号</th><th>邮箱名单</th><th>邮件语言</th></tr></thead><tbody>
-    ${state.records.map((r, i) => `<tr><td class="nowrap">${esc(r.contract_no)}</td><td>${esc(r.customer)}</td><td class="nowrap">${esc(r.expiry)}</td><td>${esc(r.service_type)}</td>
+  const bands = bandClasses(state.records), channel = isChannel();
+  $("#fillTable").innerHTML = `<p class="muted small">可以在下表直接修改邮箱名单和邮件语言（只对本次发送生效）。同一${channel ? "签约客户 / 二代" : "客户"}的行底色相同。</p>
+    <table class="data"><thead><tr>${channel ? "<th>签约客户</th><th>二代</th>" : ""}<th>客户分类</th><th>最终客户</th><th>合同号</th><th>过保时间</th><th>维保类型</th><th class="num">金额</th><th>产品型号</th><th>邮箱名单</th><th>邮件语言</th></tr></thead><tbody>
+    ${state.records.map((r, i) => `<tr class="${bands[i]}">${channel ? `<td>${esc(r.signer)}</td><td>${esc(r.tier2)}</td>` : ""}<td class="small">${esc(r.customer_class)}</td><td>${esc(r.customer)}</td><td class="nowrap">${esc(r.contract_no)}</td><td class="nowrap">${esc(r.expiry)}</td><td>${esc(r.service_type)}</td>
       <td class="num">${money(r.amount)}</td><td class="small">${(r.product_lines || []).map(esc).join("<br>") || "-"}</td>
       <td><input class="wide ${r.emails.length ? "" : "missing"}" data-rec="${i}" value="${esc(r.emails.join("; "))}" placeholder="未填写，不会发送"></td>
       <td><select data-lang="${i}"><option value="zh" ${r.lang === "en" ? "" : "selected"}>中文</option><option value="en" ${r.lang === "en" ? "selected" : ""}>English</option></select></td></tr>`).join("")}
@@ -235,7 +272,7 @@ function renderPlan() {
   $("#planTable").innerHTML = rows.length ? `<table class="data"><thead><tr><th></th><th>合同号</th><th>最终客户</th><th>维保类型</th><th>过保时间</th><th class="num">金额</th><th>内容</th><th>发送</th><th>收件人</th><th>结果</th><th></th></tr></thead><tbody>
     ${rows.map(({ i, idx }) => `<tr class="${i.action === "skip" || i.already_sent ? "dim" : ""}">
       <td><input type="checkbox" data-idx="${idx}" ${i.selected ? "checked" : ""} ${i.action === "skip" ? "disabled" : ""}></td>
-      <td class="nowrap">${esc(i.contract_no)}</td><td>${esc(i.customer)}</td><td>${esc(i.service_type)}</td><td class="nowrap">${esc(i.expiry)}</td><td class="num">${money(i.amount)}</td>
+      <td class="nowrap">${esc(i.contract_no)}</td><td>${esc(i.customer)}<div class="small muted">${esc([i.customer_class, i.mode === "channel" ? `渠道：${i.tier2 || i.signer}` : ""].filter(Boolean).join(" · "))}</div></td><td>${esc(i.service_type)}</td><td class="nowrap">${esc(i.expiry)}</td><td class="num">${money(i.amount)}</td>
       <td class="nowrap">${KIND_TEXT[i.kind]} <span class="pill">${i.lang === "en" ? "EN" : "中"}</span><div class="small muted">${esc(i.node_label)}</div></td>
       <td><span class="pill a-${i.action}">${ACTION_TEXT[i.action]}</span><div class="small muted">${esc(i.send_at ? i.send_at.replace("T", " ") : i.reason)}</div></td>
       <td class="small">${esc(i.to.join("; ")) || '<span class="err">未填写</span>'}</td>

@@ -16,7 +16,7 @@ import zipfile
 PY_VERSION = "3.12.10"
 NUGET_URL = f"https://api.nuget.org/v3-flatcontainer/python/{PY_VERSION}/python.{PY_VERSION}.nupkg"
 PY_TAG = "3.12"
-PACKAGES = ["flask", "openpyxl", "comtypes", "colorama"]   # colorama 是 click 在 Windows 上的依赖
+PACKAGES = ["flask", "openpyxl", "comtypes", "colorama", "waitress"]   # colorama 是 click 在 Windows 上的依赖
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, "build")

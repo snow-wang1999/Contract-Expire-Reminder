@@ -2,6 +2,8 @@
 import datetime as dt
 from collections import OrderedDict
 
+from .ordering import class_rank
+
 # (标签, 距过保天数下限, 上限)，上下限均含
 BUCKETS = [
     ("已过保", None, -1),
@@ -23,7 +25,7 @@ def bucket_of(days_left):
 def _group(records, key):
     groups = {}
     for r in records:
-        name = r[key] or "（未填写）"
+        name = r.get(key) or "（未填写）"
         g = groups.setdefault(name, {"name": name, "count": 0, "amount": 0.0,
                                      "within_180": 0, "expired": 0, "nearest": None})
         g["count"] += 1
@@ -79,6 +81,8 @@ def analyze(records, today=None, period=None):
         "by_office": _group(enriched, "office"),
         "by_type": _group(enriched, "service_type"),
         "by_customer": _group(enriched, "customer")[:10],
+        "by_class": sorted(_group(enriched, "customer_class"), key=lambda g: class_rank(g["name"].replace("（未填写）", ""))),
+        "by_signer": _group(enriched, "signer") if any(r.get("mode") == "channel" for r in enriched) else [],
         "by_month": list(months.values()),
-        "records": sorted(enriched, key=lambda r: r["expiry"]),
+        "records": enriched,   # 保持名单原有顺序（按客户分类 / 签约客户分组排好）
     }
