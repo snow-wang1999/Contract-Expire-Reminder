@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>过保提醒服务</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="topbar">
+  <h1>过保提醒服务</h1>
+  <span id="mailerBadge" class="badge"></span>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button data-tab="import" class="active">① 导入数据</button>
+  <button data-tab="report">② 分析报告</button>
+  <button data-tab="recipients">③ 收件人名单</button>
+  <button data-tab="send">④ 预览发送</button>
+  <button data-tab="log">发送记录</button>
+  <button data-tab="settings">设置</button>
+</nav>
+
+<main>
+  <!-- ① 导入 -->
+  <section id="tab-import" class="tab active">
+    <div class="card">
+      <h2>上传过保数据</h2>
+      <label class="drop" id="drop">
+        <input type="file" id="fileInput" accept=".xlsx,.xlsm,.csv" hidden>
+        <strong>点击选择或拖入 Excel / CSV 文件</strong>
+        <span class="muted">支持 .xlsx / .xlsm / .csv</span>
+      </label>
+      <div id="importResult"></div>
+      <details class="hint">
+        <summary>数据格式说明</summary>
+        <p>第一行为表头，按列名识别（列顺序不限）。必需列：<b>过保时间</b>、<b>合同号</b>。</p>
+        <p>可选列：代表处、最终客户、合同名称、维保类型、金额、提醒天数、邮箱名单（多个用 ; 分隔）。</p>
+        <p>识别不到表头时，按旧版“维保日历数据.xlsx”的列顺序读取：代表处 | 最终客户 | 合同名称 | 过保时间 | 维保类型 | 合同号 | 金额 | 提醒天数 | 邮箱名单。</p>
+      </details>
+    </div>
+  </section>
+
+  <!-- ② 报告 -->
+  <section id="tab-report" class="tab">
+    <div class="toolbar">
+      <span class="muted" id="reportMeta"></span>
+      <button id="exportReport" class="secondary">导出报告 (HTML)</button>
+    </div>
+    <div id="report"><p class="empty">请先导入数据</p></div>
+  </section>
+
+  <!-- ③ 收件人 -->
+  <section id="tab-recipients" class="tab">
+    <div class="card">
+      <h2>按代表处填写收件人</h2>
+      <p class="muted">同一代表处的所有合同默认发给这里填写的人。多个收件人用 ; 分隔。名单会保存在本机，下次自动带出。</p>
+      <div id="officeTable"><p class="empty">请先导入数据</p></div>
+    </div>
+    <div class="card">
+      <h2>按合同单独指定（可选）</h2>
+      <p class="muted">收件人优先级：按合同单独指定 &gt; Excel 中的邮箱名单 &gt; 按代表处。</p>
+      <input type="search" id="contractFilter" placeholder="搜索合同号 / 客户 / 代表处">
+      <div id="contractTable"></div>
+    </div>
+    <div class="toolbar sticky">
+      <span class="muted" id="recipientsStatus"></span>
+      <button id="saveRecipients">保存名单并生成发送计划 →</button>
+    </div>
+  </section>
+
+  <!-- ④ 发送 -->
+  <section id="tab-send" class="tab">
+    <div class="toolbar">
+      <span id="planSummary" class="muted"></span>
+      <span class="spacer"></span>
+      <button id="refreshPlan" class="secondary">刷新计划</button>
+      <button id="selectAll" class="secondary">全选可发送</button>
+      <button id="selectNone" class="secondary">全不选</button>
+      <button id="sendBtn">发送选中</button>
+    </div>
+    <div id="planTable"><p class="empty">请先导入数据并填写收件人</p></div>
+  </section>
+
+  <!-- 记录 -->
+  <section id="tab-log" class="tab">
+    <div class="toolbar"><span class="muted">最近 500 条发送记录（完整记录见 data/send_log.csv）</span>
+      <span class="spacer"></span><button id="reloadLog" class="secondary">刷新</button></div>
+    <div id="logTable"></div>
+  </section>
+
+  <!-- 设置 -->
+  <section id="tab-settings" class="tab">
+    <form id="settingsForm" class="card form">
+      <h2>发送设置</h2>
+      <label>发信方式
+        <select name="mailer">
+          <option value="outlook">Outlook 客户端（Windows，支持定时发送）</option>
+          <option value="smtp">SMTP 服务器（不支持定时）</option>
+          <option value="dryrun">模拟发送（只记录，不真正发信）</option>
+        </select>
+      </label>
+      <div class="grid">
+        <label>默认提前提醒天数<input type="number" name="default_remind_days" min="0"></label>
+        <label>最长排定天数<input type="number" name="max_delay_days" min="1"></label>
+        <label>定时发送时刻（点）<input type="number" name="send_hour" min="0" max="23"></label>
+        <label>文本最大长度<input type="number" name="max_text_length" min="10"></label>
+      </div>
+      <label>统一抄送（可选，多个用 ; 分隔）<input type="text" name="cc"></label>
+
+      <h2>邮件模板</h2>
+      <p class="muted">可用占位符：{office} {customer} {contract_name} {expiry} {service_type} {contract_no} {amount} {amount_fmt} {remind_date} {days_left}</p>
+      <label>标题<input type="text" name="subject_template"></label>
+      <label>正文<textarea name="body_template" rows="18"></textarea></label>
+
+      <fieldset id="smtpFields">
+        <legend>SMTP（仅在发信方式为 SMTP 时使用）</legend>
+        <div class="grid">
+          <label>服务器<input type="text" name="smtp.host"></label>
+          <label>端口<input type="number" name="smtp.port"></label>
+          <label>用户名<input type="text" name="smtp.username"></label>
+          <label>密码<input type="password" name="smtp.password"></label>
+          <label>发件人地址<input type="text" name="smtp.sender"></label>
+        </div>
+        <label class="check"><input type="checkbox" name="smtp.ssl"> SSL</label>
+        <label class="check"><input type="checkbox" name="smtp.starttls"> STARTTLS</label>
+      </fieldset>
+      <div class="toolbar"><span id="settingsStatus" class="muted"></span><span class="spacer"></span><button type="submit">保存设置</button></div>
+    </form>
+  </section>
+</main>
+
+<dialog id="previewDialog">
+  <h3 id="previewSubject"></h3>
+  <p class="muted" id="previewTo"></p>
+  <pre id="previewBody"></pre>
+  <form method="dialog"><button>关闭</button></form>
+</dialog>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
