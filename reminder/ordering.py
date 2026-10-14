@@ -5,12 +5,13 @@
 """
 
 # (等级名称, 识别关键字)；按顺序越靠前级别越高。识别时忽略大小写
+# 导出数据中：Strategic Account=战略，Core Account=核心，Value Account=价值，Small&Medium Account=商业
 CLASS_LEVELS = [
     ("卓越", ["卓越", "excellen", "premier", "top"]),
     ("战略", ["战略", "strategic"]),
     ("核心", ["核心", "core"]),
     ("价值", ["价值", "value"]),
-    ("中小", ["中小", "small", "medium", "sme"]),
+    ("商业", ["商业", "small", "medium", "commercial"]),
 ]
 KEY_ACCOUNT_RANK = 3          # 等级 1~3 为卓越 / 战略 / 核心客户（“卓战核”）
 OTHER_RANK = len(CLASS_LEVELS) + 1
@@ -25,6 +26,14 @@ def class_rank(customer_class):
         if any(k in text for k in keywords):
             return rank
     return OTHER_RANK
+
+
+def class_label(customer_class):
+    """中文等级名，如 “Strategic Account” -> “战略”；空值为“未分类”。"""
+    rank = class_rank(customer_class)
+    if rank <= len(CLASS_LEVELS):
+        return CLASS_LEVELS[rank - 1][0]
+    return "未分类" if rank == BLANK_RANK else "其他"
 
 
 def is_key_account(customer_class):

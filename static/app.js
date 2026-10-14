@@ -91,7 +91,7 @@ function updateModeUi() {
   $("#channelOpt").hidden = !channel;
   $("#modeHint").textContent = channel
     ? "按签约客户、二代分组排列，收件人填写总代或二代的联系人；邮件不含金额和内部信息，默认英文。"
-    : "按客户分类（卓越 > 战略 > 核心 > 价值 > 中小）排列，同一客户相邻；默认中文。";
+    : "按客户分类（卓越 > 战略 > 核心 > 价值 > 商业）排列，同一客户相邻；默认中文。";
 }
 document.querySelectorAll("input[name=mode]").forEach((r) => r.addEventListener("change", updateModeUi));
 updateModeUi();

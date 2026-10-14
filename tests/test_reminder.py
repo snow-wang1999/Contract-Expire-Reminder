@@ -259,6 +259,7 @@ def test_customer_mode_orders_by_class_and_keeps_customer_together():
     assert [r["contract_no"] for r in records] == ["S2", "S1", "C1", "V1", "N1"]
     assert records[0]["customer_class"] == "Strategic Account" and records[0]["mode"] == "customer"
     assert ordering.class_rank("卓越客户") < ordering.class_rank("Strategic Account") < ordering.class_rank("Small&Medium Account")
+    assert ordering.class_label("Small&Medium Account") == "商业" and ordering.class_label("") == "未分类"
 
 
 def test_channel_mode_filters_key_accounts_and_groups_by_signer():

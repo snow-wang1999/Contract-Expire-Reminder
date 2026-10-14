@@ -2,7 +2,7 @@
 import datetime as dt
 from collections import OrderedDict
 
-from .ordering import class_rank
+from .ordering import class_label, class_rank
 
 # (标签, 距过保天数下限, 上限)，上下限均含
 BUCKETS = [
@@ -37,6 +37,15 @@ def _group(records, key):
         if (g["nearest"] is None or r["expiry"] < g["nearest"]):
             g["nearest"] = r["expiry"]
     return sorted(groups.values(), key=lambda g: (-g["amount"], -g["count"]))
+
+
+def _by_class(records):
+    """按客户分类汇总，按等级从高到低，名称显示为“战略 · Strategic Account”。"""
+    rows = []
+    for g in _group(records, "customer_class"):
+        raw = "" if g["name"] == "（未填写）" else g["name"]
+        rows.append({**g, "rank": class_rank(raw), "name": class_label(raw) + (f" · {raw}" if raw else "")})
+    return sorted(rows, key=lambda g: g["rank"])
 
 
 def analyze(records, today=None, period=None):
@@ -81,7 +90,7 @@ def analyze(records, today=None, period=None):
         "by_office": _group(enriched, "office"),
         "by_type": _group(enriched, "service_type"),
         "by_customer": _group(enriched, "customer")[:10],
-        "by_class": sorted(_group(enriched, "customer_class"), key=lambda g: class_rank(g["name"].replace("（未填写）", ""))),
+        "by_class": _by_class(enriched),
         "by_signer": _group(enriched, "signer") if any(r.get("mode") == "channel" for r in enriched) else [],
         "by_month": list(months.values()),
         "records": enriched,   # 保持名单原有顺序（按客户分类 / 签约客户分组排好）
