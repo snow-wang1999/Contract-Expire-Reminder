@@ -21,9 +21,11 @@ const EN = {
   "客户通知（发给负责该客户的同事，默认中文）": "Customer notice (to colleagues in charge of the customer, Chinese by default)",
   "渠道续保通知（发给签约客户 / 二代，默认英文）": "Channel renewal notice (to the contracting partner / tier-2 partner, English by default)",
   "只包含非卓越 / 战略 / 核心客户（卓战核客户走客户通知）": "Only non-Premier / Strategic / Core accounts (those go through customer notices)",
+  "只包含卓越 / 战略 / 核心客户（默认包含全部客户）": "Only Premier / Strategic / Core accounts (all customers by default)",
+  "非卓越 / 战略 / 核心客户": "Non-Premier / Strategic / Core accounts",
   "按签约客户、二代分组排列，收件人填写总代或二代的联系人；同一伙伴的合同合并成一封邮件，不含金额和内部信息，默认英文。":
     "Grouped by contracting partner and tier-2 partner. Fill in the partner contacts; contracts of the same partner (same tier-2) are merged into one email without prices or internal information. English by default.",
-  "按客户分类（卓越 > 战略 > 核心 > 价值 > 商业）排列，同一客户相邻；默认中文。":
+  "按客户分类（卓越 > 战略 > 核心 > 价值 > 商业）排列，同一客户相邻；默认包含全部客户，默认中文。":
     "Sorted by account class (Premier > Strategic > Core > Value > Commercial), rows of the same customer kept together. Chinese by default.",
   "筛选参数": "Filters",
   "过保时间从": "Expiry from",

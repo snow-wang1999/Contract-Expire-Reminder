@@ -8,7 +8,7 @@
 5. 排序：客户通知按客户分类等级、同一客户相邻；渠道通知按签约客户、二代相邻
 
 两种通知模式：
-- customer（客户通知，默认）：发给负责该最终客户的内部人员，默认中文
+- customer（客户通知，默认）：发给负责该最终客户的内部人员，默认包含全部客户（可选只含卓越/战略/核心客户），默认中文
 - channel（渠道续保通知）：发给签约客户（总代）或二代，默认只含非卓越/战略/核心客户，默认英文
 """
 import datetime as dt
@@ -30,6 +30,7 @@ DEFAULT_OPTIONS = {
     "min_amount": 20000,
     "mode": "customer",          # customer：客户通知；channel：渠道续保通知
     "channel_non_key_only": True,  # 渠道模式下只包含非卓越/战略/核心客户
+    "customer_key_only": False,    # 客户模式下只包含卓越/战略/核心客户（默认包含全部）
 }
 
 
@@ -71,6 +72,7 @@ def transform(rows, options=None, today=None):
     min_amount = float(opts["min_amount"] or 0)
     mode = "channel" if opts["mode"] == "channel" else "customer"
     non_key_only = mode == "channel" and bool(opts["channel_non_key_only"])
+    key_only = mode == "customer" and bool(opts["customer_key_only"])
 
     header = [_text(h) for h in rows[0]]
     idx = {name: i for i, name in reversed(list(enumerate(header))) if name}
@@ -79,7 +81,7 @@ def transform(rows, options=None, today=None):
         i = idx.get(name)
         return row[i] if i is not None and i < len(row) else None
 
-    funnel = {"rows": 0, "out_of_period": 0, "eos": 0, "no_expand": 0, "dc_energy": 0, "key_account": 0,
+    funnel = {"rows": 0, "out_of_period": 0, "eos": 0, "no_expand": 0, "dc_energy": 0, "key_account": 0, "non_key_account": 0,
               "bad_row": 0, "kept_rows": 0, "groups": 0, "below_min": 0, "records": 0}
     excluded, warnings, groups = [], [], {}
 
@@ -122,6 +124,8 @@ def transform(rows, options=None, today=None):
             reason, key = "产品线为数据中心能源及关键供电", "dc_energy"
         elif non_key_only and is_key_account(info["customer_class"]):
             reason, key = "卓越/战略/核心客户（走客户通知）", "key_account"
+        elif key_only and not is_key_account(info["customer_class"]):
+            reason, key = "非卓越/战略/核心客户（走渠道通知）", "non_key_account"
         if reason:
             funnel[key] += 1
             excluded.append({**info, "reason": reason})
@@ -172,5 +176,5 @@ def transform(rows, options=None, today=None):
     period = {"start": start.isoformat(), "end": end.isoformat(), "min_amount": min_amount,
               "include_eos": bool(opts["include_eos"]), "include_no_expand": bool(opts["include_no_expand"]),
               "include_dc_energy": bool(opts["include_dc_energy"]), "mode": mode,
-              "channel_non_key_only": non_key_only}
+              "channel_non_key_only": non_key_only, "customer_key_only": key_only}
     return records, {**funnel, "period": period}, excluded, warnings

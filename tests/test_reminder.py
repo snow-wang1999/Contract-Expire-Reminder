@@ -352,3 +352,15 @@ def test_email_templates_are_well_formed():
         c.feed(store.DEFAULT_SETTINGS[key])
         assert not c.errors and not c.stack, (key, c.errors, c.stack)
         assert "\nr>" not in store.DEFAULT_SETTINGS[key]
+
+
+def test_customer_mode_includes_all_by_default_and_can_limit_to_key_accounts():
+    rows = [RAW_HEADER,
+            raw_row("S1", "2027-02-01", customer="Strat", cls="Strategic Account"),
+            raw_row("V1", "2027-02-01", customer="Val", cls="Value Account"),
+            raw_row("N1", "2027-02-01", customer="NoClass", cls=None)]
+    records, funnel, _, _ = raw.transform(rows, {}, today=TODAY)
+    assert {r["contract_no"] for r in records} == {"S1", "V1", "N1"} and funnel["non_key_account"] == 0
+    records, funnel, excluded, _ = raw.transform(rows, {"customer_key_only": True}, today=TODAY)
+    assert [r["contract_no"] for r in records] == ["S1"] and funnel["non_key_account"] == 2
+    assert {e["reason"] for e in excluded} == {"非卓越/战略/核心客户（走渠道通知）"}

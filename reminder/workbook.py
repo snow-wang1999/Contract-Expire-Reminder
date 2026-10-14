@@ -229,6 +229,8 @@ def build(records, excluded, funnel):
     ]
     if mode == "channel":
         rows.append(["卓越/战略/核心客户", yes(not period.get("channel_non_key_only"))])
+    else:
+        rows.append(["非卓越/战略/核心客户", yes(not period.get("customer_key_only"))])
     rows += [
         [],
         ["原始数据行数", funnel["rows"]],
@@ -237,6 +239,7 @@ def build(records, excluded, funnel):
         ["不再拓展", funnel["no_expand"]],
         ["数据中心能源及关键供电", funnel["dc_energy"]],
         ["卓越/战略/核心客户", funnel.get("key_account", 0)],
+        ["非卓越/战略/核心客户", funnel.get("non_key_account", 0)],
         ["缺少合同号/日期", funnel["bad_row"]],
         ["合并后提醒条数", funnel["groups"]],
         ["目录价未超过门槛", funnel["below_min"]],

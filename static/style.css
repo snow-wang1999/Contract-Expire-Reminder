@@ -12,6 +12,7 @@
   }
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif; }
 main { max-width: 1280px; margin: 0 auto; padding: 16px; }
 h1 { font-size: 20px; margin: 0; }

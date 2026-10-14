@@ -64,7 +64,8 @@ def import_raw():
                    "include_dc_energy": form.get("include_dc_energy") == "true",
                    "min_amount": float(form.get("min_amount") or raw.DEFAULT_OPTIONS["min_amount"]),
                    "mode": form.get("mode") or "customer",
-                   "channel_non_key_only": form.get("channel_non_key_only", "true") == "true"}
+                   "channel_non_key_only": form.get("channel_non_key_only", "true") == "true",
+                   "customer_key_only": form.get("customer_key_only") == "true"}
         records, funnel, excluded, warnings = raw.transform(rows, options)
     except Exception as e:
         return _bad_request(f"原始数据处理失败：{e}")

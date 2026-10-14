@@ -69,6 +69,7 @@ async function importRaw(file) {
   fd.append("include_dc_energy", $("#optDc").checked);
   fd.append("mode", currentMode());
   fd.append("channel_non_key_only", $("#optNonKey").checked);
+  fd.append("customer_key_only", $("#optKeyOnly").checked);
   $("#rawResult").innerHTML = `<p class="muted">${esc(t("正在处理 {name} …", { name: file.name }))}</p>`;
   try {
     const data = await api("/api/raw", fd);
@@ -106,9 +107,10 @@ function currentMode() {
 function updateModeUi() {
   const channel = currentMode() === "channel";
   $("#channelOpt").hidden = !channel;
+  $("#customerOpt").hidden = channel;
   $("#modeHint").textContent = channel
     ? t("按签约客户、二代分组排列，收件人填写总代或二代的联系人；同一伙伴的合同合并成一封邮件，不含金额和内部信息，默认英文。")
-    : t("按客户分类（卓越 > 战略 > 核心 > 价值 > 商业）排列，同一客户相邻；默认中文。");
+    : t("按客户分类（卓越 > 战略 > 核心 > 价值 > 商业）排列，同一客户相邻；默认包含全部客户，默认中文。");
 }
 document.querySelectorAll("input[name=mode]").forEach((r) => r.addEventListener("change", updateModeUi));
 
@@ -130,6 +132,7 @@ function funnelHtml(f) {
     [t("资产状态为不再拓展"), -f.no_expand, f.period.include_no_expand ? included : ""],
     [t("数据中心能源及关键供电"), -f.dc_energy, f.period.include_dc_energy ? included : ""],
     [t("卓越 / 战略 / 核心客户"), -(f.key_account || 0), ""],
+    [t("非卓越 / 战略 / 核心客户"), -(f.non_key_account || 0), ""],
     [t("缺少合同号或日期"), -f.bad_row, ""],
     [t("按 合同号+过保时间+服务类型 合并后"), f.groups, t("条"), true],
     [t("合计目录价未超过 {min}", { min: money(f.period.min_amount) }), -f.below_min, ""],
