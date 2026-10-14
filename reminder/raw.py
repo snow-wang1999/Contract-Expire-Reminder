@@ -8,7 +8,7 @@
 """
 import datetime as dt
 
-from .parser import parse_amount, parse_date
+from .parser import parse_amount, parse_date, parse_int
 
 RAW_SIGNATURE = ("当前合同号", "服务结束", "目录价")
 
@@ -41,6 +41,15 @@ def _text(value):
     if isinstance(value, float) and value.is_integer():
         value = int(value)
     return str(value).strip()
+
+
+def product_summary(products):
+    """同型号合并，返回 [(型号, 报价项数量合计)]，按数量从多到少。导出表一行是一个型号，数量在“服务报价项数量”里。"""
+    totals = {}
+    for p in products:
+        name = p.get("product") or "（未注明型号）"
+        totals[name] = totals.get(name, 0) + (p.get("qty") or 0)
+    return sorted(totals.items(), key=lambda kv: -kv[1])
 
 
 def transform(rows, options=None, today=None):
@@ -82,6 +91,9 @@ def transform(rows, options=None, today=None):
             "asset_status": _text(get(row, "资产状态")),
             "lv1": _text(get(row, "产品线LV1")),
             "amount": parse_amount(get(row, "目录价")),
+            "qty": parse_int(get(row, "服务报价项数量")),
+            "units": parse_int(get(row, "整机标识数量")),
+            "package": _text(get(row, "服务包名称")),
         }
 
         reason = None

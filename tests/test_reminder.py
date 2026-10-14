@@ -202,3 +202,9 @@ def test_end_to_end_dryrun(client):
     # 再次导入原始数据时按客户带出上次的邮箱
     again = client.post("/api/raw", data={"file": (io.BytesIO(content), "raw.xlsx")}).get_json()
     assert again["records"] == [] or all(r["emails"] == ["a@x.com"] for r in again["records"])
+
+
+def test_product_summary_merges_same_model():
+    products = [{"product": "S5735", "qty": 5}, {"product": "AR611", "qty": 1}, {"product": "S5735", "qty": 2},
+                {"product": "", "qty": None}]
+    assert raw.product_summary(products) == [("S5735", 7), ("AR611", 1), ("（未注明型号）", 0)]

@@ -2,6 +2,8 @@
 import datetime as dt
 import io
 
+from .raw import product_summary
+
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -15,7 +17,8 @@ FILL_ME = PatternFill("solid", fgColor="FFF2CC")
 EXAMPLE_FILL = PatternFill("solid", fgColor="F2F2F2")
 
 PRODUCT_COLUMNS = [("合同号", "contract_no"), ("过保时间", "expiry"), ("服务类型", "service_type"),
-                   ("最终客户", "customer"), ("续保产品", "product"), ("目录价", "amount"),
+                   ("最终客户", "customer"), ("续保产品", "product"), ("服务包名称", "package"),
+                   ("报价项数量", "qty"), ("整机数量", "units"), ("目录价", "amount"),
                    ("EOS时间", "eos"), ("资产状态", "asset_status"), ("产品线LV1", "lv1"), ("原始行号", "row")]
 
 GUIDE = [
@@ -64,18 +67,18 @@ def build(records, excluded, funnel):
 
     ws = wb.active
     ws.title = "提醒名单"
-    _header(ws, LIST_COLUMNS + ["产品数", "产品明细"])
+    _header(ws, LIST_COLUMNS + ["型号数", "报价项数量", "产品明细（型号×报价项数量）"])
     for r in records:
-        products = r.get("products", [])
+        summary = product_summary(r.get("products", []))
         ws.append([r["office"], r["customer"], r["contract_name"], _date(r["expiry"]), r["service_type"],
                    r["contract_no"], round(r["amount"], 2), ";".join(r.get("emails", [])),
-                   len(products), "；".join(p["product"] for p in products if p.get("product"))])
+                   len(summary), sum(q for _, q in summary), "；".join(f"{n}×{q}" for n, q in summary)])
     for row in ws.iter_rows(min_row=2):
         row[3].number_format = "yyyy-mm-dd"
         row[6].number_format = "#,##0"
         row[EMAIL_COL - 1].fill = FILL_ME
     ws.cell(1, EMAIL_COL).fill = PatternFill("solid", fgColor="BF8F00")
-    _widths(ws, [16, 28, 40, 12, 12, 18, 12, 50, 8, 60])
+    _widths(ws, [16, 28, 40, 12, 12, 18, 12, 50, 8, 10, 70])
 
     guide = wb.create_sheet("填写说明")
     for line in GUIDE:
@@ -96,13 +99,13 @@ def build(records, excluded, funnel):
     for r in records:
         for p in r.get("products", []):
             detail.append([p.get(k) for _, k in PRODUCT_COLUMNS])
-    _widths(detail, [18, 12, 12, 28, 36, 12, 12, 10, 18, 9])
+    _widths(detail, [18, 12, 12, 28, 32, 40, 10, 10, 12, 12, 10, 18, 9])
 
     out = wb.create_sheet("已排除")
     _header(out, ["排除原因"] + [c for c, _ in PRODUCT_COLUMNS])
     for p in excluded:
         out.append([p["reason"]] + [p.get(k) for _, k in PRODUCT_COLUMNS])
-    _widths(out, [30, 18, 12, 12, 28, 36, 12, 12, 10, 18, 9])
+    _widths(out, [30, 18, 12, 12, 28, 32, 40, 10, 10, 12, 12, 10, 18, 9])
 
     cond = wb.create_sheet("筛选条件")
     period = funnel["period"]
