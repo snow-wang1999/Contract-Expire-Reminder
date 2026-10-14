@@ -13,6 +13,8 @@ TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templat
 
 with open(os.path.join(TEMPLATE_DIR, "email.html"), encoding="utf-8") as _f:
     DEFAULT_BODY = _f.read()
+with open(os.path.join(TEMPLATE_DIR, "email_en.html"), encoding="utf-8") as _f:
+    DEFAULT_BODY_EN = _f.read()
 
 DEFAULT_SETTINGS = {
     # outlook：本机 Outlook 发送（支持定时和日历邀请）；smtp：SMTP 服务器；dryrun：只记录不发送
@@ -22,6 +24,10 @@ DEFAULT_SETTINGS = {
     "subject_template": "{customer} | {amount_fmt}维保过保|续保拓展提醒",
     "body_template": DEFAULT_BODY,
     "calendar_subject_template": "【过保】{customer} | {amount_fmt} | {service_type}",
+    # 英文版（Excel“邮件语言”选 English 的行使用）
+    "subject_template_en": "{customer} | {amount_fmt} Warranty Expiry | Renewal Reminder",
+    "body_template_en": DEFAULT_BODY_EN,
+    "calendar_subject_template_en": "[Warranty Expiry] {customer} | {amount_fmt} | {service_type}",
     "smtp": {"host": "", "port": 465, "ssl": True, "starttls": False,
              "username": "", "password": "", "sender": ""},
 }
@@ -56,7 +62,8 @@ def load_settings():
     saved = _read_json("settings.json", {})
     settings = {**DEFAULT_SETTINGS, **saved}
     settings["smtp"] = {**DEFAULT_SETTINGS["smtp"], **saved.get("smtp", {})}
-    for key in ("subject_template", "body_template", "calendar_subject_template"):
+    for key in ("subject_template", "body_template", "calendar_subject_template",
+                "subject_template_en", "body_template_en", "calendar_subject_template_en"):
         settings[key] = settings.get(key) or DEFAULT_SETTINGS[key]   # 留空表示使用默认模板
     return settings
 
@@ -72,8 +79,9 @@ def save_settings(values):
 
 
 def load_recipients():
-    """记住每个最终客户上次填写的邮箱名单：{"customer": {客户: "a;b"}}"""
-    return {"customer": _read_json("recipients.json", {}).get("customer", {})}
+    """记住每个最终客户上次填写的邮箱名单和邮件语言：{"customer": {客户: "a;b"}, "lang": {客户: "en"}}"""
+    data = _read_json("recipients.json", {})
+    return {"customer": data.get("customer", {}), "lang": data.get("lang", {})}
 
 
 def remember_recipients(records):
@@ -81,6 +89,7 @@ def remember_recipients(records):
     for r in records:
         if r.get("customer") and r.get("emails"):
             data["customer"][r["customer"]] = ";".join(r["emails"])
+            data["lang"][r["customer"]] = r.get("lang", "zh")
     with _lock:
         _write_json("recipients.json", data)
     return data

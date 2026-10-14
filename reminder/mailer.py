@@ -37,23 +37,31 @@ class OutlookMailer:
     supports_calendar = True
 
     def __enter__(self):
+        # 优先用纯 Python 的 comtypes（随程序打包，无需联网安装），没有时再用 pywin32
         try:
-            import pythoncom
-            import win32com.client as win32
-        except ImportError as e:
-            raise MailerError("未安装 pywin32 或当前不是 Windows，无法使用 Outlook 发送") from e
-        pythoncom.CoInitialize()
-        self._pythoncom = pythoncom
+            import comtypes
+            import comtypes.client
+            self._init, self._uninit = comtypes.CoInitialize, comtypes.CoUninitialize
+            create = lambda: comtypes.client.CreateObject("Outlook.Application", dynamic=True)
+        except ImportError:
+            try:
+                import pythoncom
+                import win32com.client
+            except ImportError as e:
+                raise MailerError("当前不是 Windows 或缺少 comtypes/pywin32，无法使用 Outlook 发送") from e
+            self._init, self._uninit = pythoncom.CoInitialize, pythoncom.CoUninitialize
+            create = lambda: win32com.client.Dispatch("Outlook.Application")
+        self._init()
         try:
-            self._outlook = win32.Dispatch("Outlook.Application")
+            self._outlook = create()
         except Exception as e:
-            pythoncom.CoUninitialize()
+            self._uninit()
             raise MailerError(f"无法启动 Outlook：{e}") from e
         return self
 
     def __exit__(self, *exc):
         self._outlook = None
-        self._pythoncom.CoUninitialize()
+        self._uninit()
         return False
 
     def send(self, to, cc, subject, body, send_at=None):

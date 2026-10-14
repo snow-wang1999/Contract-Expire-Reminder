@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Huawei Service Reminder</title>
+</head>
+
+<body style="margin:0;padding:0;background-color:#f5f6f7;font-family:'Hiragino Sans GB', 'Noto Sans CJK SC', Arial, Helvetica, sans-serif;">
+
+<table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f5f6f7;">
+  <tr>
+    <td align="center">
+
+      <table width="680" cellpadding="0" cellspacing="0"
+             style="background-color:#ffffff;margin:24px 0;border:1px solid #e6e6e6;">
+
+        <!-- Header -->
+        <tr>
+          <td style="padding:40px 20px;border-bottom:5px solid #c7000b;">
+            <span style="font-size:30px;font-weight:bold;color:#c7000b;">
+              Southern Africa | Warranty Expiry Reminder
+            </span>
+          </td>
+        </tr>
+
+        <!-- Title -->
+        <tr>
+          <td style="padding:24px 24px 12px 24px;">
+            <div style="font-size:20px;font-weight:bold;color:#000;">
+              ⏰ Contract Expiry Reminder | {expiry}
+            </div>
+          </td>
+        </tr>
+
+        <!-- Basic info -->
+        <tr>
+          <td style="padding:0 24px 20px 24px;">
+            <table width="100%" cellpadding="6" cellspacing="0"
+                   style="font-size:14px;color:#333;">
+              <tr>
+                <td width="140">Rep Office</td>
+                <td>{office}</td>
+              </tr>
+              <tr>
+                <td>End Customer</td>
+                <td><strong>{customer}</strong></td>
+              </tr>
+              <tr>
+                <td>Contract Name</td>
+                <td>{contract_name}</td>
+              </tr>
+              <tr>
+                <td>Service Type</td>
+                <td>{service_type}</td>
+              </tr>
+              <tr>
+                <td>Contract No.</td>
+                <td>{contract_no}</td>
+              </tr>
+              <tr>
+                <td style="vertical-align:top;">Products</td>
+                <td>{products}</td>
+              </tr>
+              <tr>
+                <td>List Price</td>
+                <td>{amount_fmt}</td>
+              </tr>
+              <tr>
+                <td>Reminder</td>
+                <td>{node_label} ({days_text})</td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+        <!-- Milestones -->
+        <tr>
+          <td style="padding:16px 24px;background-color:#fafafa;border-top:1px solid #e6e6e6;">
+            <div style="font-size:15px;font-weight:bold;margin-bottom:8px;">
+              📌 Key Renewal Milestones (key projects are managed in eCrop)
+            </div>
+            <table width="100%" cellpadding="6" cellspacing="0"
+                   style="font-size:13px;color:#333;">
+              <tr>
+                <td width="140">6 months before</td>
+                <td>Start customer communication and opportunity validation, hold a customer meeting if needed, and secure the maintenance budget</td>
+              </tr>
+              <tr>
+                <td>3 months before</td>
+                <td>Confirm maintenance scope and service level, complete the PPQ review, and define the contracting path</td>
+              </tr>
+              <tr>
+                <td>1 month before</td>
+                <td>Complete the renewal contract, send the welcome pack, and confirm the service start date</td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+        <!-- Support -->
+        <tr>
+          <td style="padding:16px 24px;">
+            <div style="font-size:15px;font-weight:bold;margin-bottom:8px;">
+              🔧 Support
+            </div>
+            <div style="font-size:13px;color:#333;line-height:1.6;">
+              • Value presentation template: Wang Xuejian 00621410<br>
+              • Regional call center: Bheki 00608962<br>
+              • AMS team network health check (on demand)
+            </div>
+          </td>
+        </tr>
+
+        <!-- Links -->
+        <tr>
+          <td style="padding:24px;border-top:1px solid #e6e6e6;">
+            <table width="100%" cellpadding="8" cellspacing="0">
+              <tr>
+                <td align="center">
+                  <a href="https://support.huawei.com/enterprise/en/customer-support-service/ENEWS1000008632"
+                     style="display:inline-block;padding:10px 16px;border:1px solid #c7000b;
+                            color:#c7000b;text-decoration:none;font-size:13px;">
+                    Warranty Service Description
+                  </a>
+                </td>
+                <td align="center">
+                  <a href="https://ilearning.huawei.com/course/100000/application-learn/COU20250411000036?classCode=&sourcesType=&blockType=&blockId=&sxz-lang=zh_CN#d5051628e81340579d02b7c7aae0a612"
+                     style="display:inline-block;padding:10px 16px;border:1px solid #c7000b;
+                            color:#c7000b;text-decoration:none;font-size:13px;">
+                    Customer Support Sales iLearning Course
+                  </a>
+                </td>
+              </tr>
+              <tr>
+                <td align="center">
+                  <a href="https://netcare.huawei.com/p/netcare/index.html#/home"
+                     style="display:inline-block;padding:10px 16px;border:1px solid #c7000b;
+                            color:#c7000b;text-decoration:none;font-size:13px;">
+                    eCrop Maintenance Portal
+                  </a>
+                </td>
+                <td align="center">
+                  <a href="https://3ms.huawei.com/next/groups/index.html#/file/detail?groupId=3950392&id=20323837&"
+                     style="display:inline-block;padding:10px 16px;border:1px solid #c7000b;
+                            color:#c7000b;text-decoration:none;font-size:13px;">
+                    Southern Africa Service Capability GIS Map
+                  </a>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+        <!-- Footer -->
+        <tr>
+          <td style="padding:16px 24px;background-color:#fafafa;font-size:12px;color:#666;">
+            📢 This notice is generated automatically. Please contact the customer promptly to confirm the renewal.<br>
+            Please do not reply to this email. eCrop is the source of truth for maintenance information.
+          </td>
+        </tr>
+
+      </table>
+
+    </td>
+  </tr>
+</table>
+
+</body>
+</html>

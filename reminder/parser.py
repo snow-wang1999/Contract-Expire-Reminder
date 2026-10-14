@@ -21,6 +21,8 @@ COLUMN_ALIASES = {
     "amount": ["金额", "合同金额", "维保金额"],
     "remind_days": ["提醒天数", "提前提醒天数"],
     "emails": ["邮箱名单", "邮箱", "收件人", "邮件名单"],
+    "lang": ["邮件语言", "语言", "Language"],
+    "product_lines": ["产品明细（型号×报价项数量）", "产品明细(型号×报价项数量)", "产品明细", "产品型号"],
 }
 
 # 旧版 维保日历数据.xlsx 的列顺序
@@ -33,6 +35,13 @@ DATE_FORMATS = ["%Y/%m/%d", "%Y-%m-%d", "%Y.%m.%d", "%Y%m%d", "%Y年%m月%d日",
                 "%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M", "%Y-%m-%d %H:%M"]
 
 EMAIL_SEPARATORS = re.compile(r"[;；,，\n]+")
+PRODUCT_SEPARATORS = re.compile(r"[;；\n]+")
+
+
+def parse_lang(value):
+    """“English / 英文 / EN” 为英文，其余（含留空）为中文。"""
+    text = str(value or "").strip().lower()
+    return "en" if text.startswith(("en", "英")) else "zh"
 
 
 def _norm(header):
@@ -176,5 +185,7 @@ def parse_rows(rows):
             "amount": parse_amount(cell(row, "amount")),
             "remind_days": parse_int(cell(row, "remind_days")),
             "emails": split_emails(cell(row, "emails")),
+            "lang": parse_lang(cell(row, "lang")),
+            "product_lines": [p.strip() for p in PRODUCT_SEPARATORS.split(_text(cell(row, "product_lines"))) if p.strip()],
         })
     return records, warnings

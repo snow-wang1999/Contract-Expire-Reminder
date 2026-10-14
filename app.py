@@ -68,10 +68,11 @@ def import_raw():
         return _bad_request(f"原始数据处理失败：{e}")
 
     # 按客户带出上次填写的邮箱名单
-    memory = store.load_recipients()["customer"]
+    memory = store.load_recipients()
     for r in records:
-        if r["customer"] in memory:
-            r["emails"] = parser.split_emails(memory[r["customer"]])
+        if r["customer"] in memory["customer"]:
+            r["emails"] = parser.split_emails(memory["customer"][r["customer"]])
+            r["lang"] = memory["lang"].get(r["customer"], "zh")
 
     _last_import.clear()
     _last_import.update(records=records, excluded=excluded, funnel=funnel)
@@ -174,9 +175,21 @@ def get_log():
     return jsonify({"log": list(reversed(store.read_log()))[:500]})
 
 
+def _free_port(preferred):
+    """优先用指定端口，被占用时依次往后找。"""
+    import socket
+    for port in range(preferred, preferred + 20):
+        with socket.socket() as sock:
+            if sock.connect_ex(("127.0.0.1", port)) != 0:
+                return port
+    return preferred
+
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = _free_port(int(os.environ.get("PORT", 5000)))
+    url = f"http://127.0.0.1:{port}"
+    print(f"过保提醒服务已启动：{url}\n使用期间请不要关闭本窗口。", flush=True)
     if not os.environ.get("NO_BROWSER"):
-        threading.Timer(1.0, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     # 只监听本机，避免同网段其他人访问到发信接口
     app.run(host="127.0.0.1", port=port, debug=False)

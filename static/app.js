@@ -187,12 +187,17 @@ async function uploadFilled(file) {
 setupDrop("#fillDrop", "#fillInput", uploadFilled);
 
 function renderFillTable() {
-  $("#fillTable").innerHTML = `<p class="muted small">可以在下表直接修改邮箱名单（只对本次发送生效，下次上传时会记住）。</p>
-    <table class="data"><thead><tr><th>合同号</th><th>最终客户</th><th>过保时间</th><th>维保类型</th><th class="num">金额</th><th>邮箱名单</th></tr></thead><tbody>
-    ${state.records.map((r, i) => `<tr><td>${esc(r.contract_no)}</td><td>${esc(r.customer)}</td><td>${esc(r.expiry)}</td><td>${esc(r.service_type)}</td>
-      <td class="num">${money(r.amount)}</td><td><input class="wide ${r.emails.length ? "" : "missing"}" data-rec="${i}" value="${esc(r.emails.join("; "))}" placeholder="未填写，不会发送"></td></tr>`).join("")}
+  $("#fillTable").innerHTML = `<p class="muted small">可以在下表直接修改邮箱名单和邮件语言（只对本次发送生效）。</p>
+    <table class="data"><thead><tr><th>合同号</th><th>最终客户</th><th>过保时间</th><th>维保类型</th><th class="num">金额</th><th>产品型号</th><th>邮箱名单</th><th>邮件语言</th></tr></thead><tbody>
+    ${state.records.map((r, i) => `<tr><td class="nowrap">${esc(r.contract_no)}</td><td>${esc(r.customer)}</td><td class="nowrap">${esc(r.expiry)}</td><td>${esc(r.service_type)}</td>
+      <td class="num">${money(r.amount)}</td><td class="small">${(r.product_lines || []).map(esc).join("<br>") || "-"}</td>
+      <td><input class="wide ${r.emails.length ? "" : "missing"}" data-rec="${i}" value="${esc(r.emails.join("; "))}" placeholder="未填写，不会发送"></td>
+      <td><select data-lang="${i}"><option value="zh" ${r.lang === "en" ? "" : "selected"}>中文</option><option value="en" ${r.lang === "en" ? "selected" : ""}>English</option></select></td></tr>`).join("")}
     </tbody></table>`;
 }
+$("#fillTable").addEventListener("change", (e) => {
+  if (e.target.dataset.lang !== undefined) state.records[+e.target.dataset.lang].lang = e.target.value;
+});
 $("#fillTable").addEventListener("input", (e) => {
   const i = e.target.dataset.rec;
   if (i === undefined) return;
@@ -231,7 +236,7 @@ function renderPlan() {
     ${rows.map(({ i, idx }) => `<tr class="${i.action === "skip" || i.already_sent ? "dim" : ""}">
       <td><input type="checkbox" data-idx="${idx}" ${i.selected ? "checked" : ""} ${i.action === "skip" ? "disabled" : ""}></td>
       <td class="nowrap">${esc(i.contract_no)}</td><td>${esc(i.customer)}</td><td>${esc(i.service_type)}</td><td class="nowrap">${esc(i.expiry)}</td><td class="num">${money(i.amount)}</td>
-      <td class="nowrap">${KIND_TEXT[i.kind]}<div class="small muted">${esc(i.node_label)}</div></td>
+      <td class="nowrap">${KIND_TEXT[i.kind]} <span class="pill">${i.lang === "en" ? "EN" : "中"}</span><div class="small muted">${esc(i.node_label)}</div></td>
       <td><span class="pill a-${i.action}">${ACTION_TEXT[i.action]}</span><div class="small muted">${esc(i.send_at ? i.send_at.replace("T", " ") : i.reason)}</div></td>
       <td class="small">${esc(i.to.join("; ")) || '<span class="err">未填写</span>'}</td>
       <td class="small">${resultHtml(i)}</td>

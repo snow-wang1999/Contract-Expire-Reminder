@@ -85,6 +85,9 @@ def test_workbook_roundtrip():
         [(r["contract_no"], r["expiry"], r["service_type"], r["amount"]) for r in records]
     assert parsed[0]["emails"] == ["a@x.com"] and parsed[1]["emails"] == ["b@x.com", "c@x.com"]
     assert parsed[2]["emails"] == []
+    assert all(p["lang"] == "zh" for p in parsed)
+    assert parsed[1]["product_lines"] == records[1]["product_lines"] == ["P1×0", "P2×0"]
+    assert wb["提醒名单"].data_validations.dataValidation[0].formula1 == '"中文,English"'
 
 
 def test_parse_legacy_format():
@@ -208,3 +211,36 @@ def test_product_summary_merges_same_model():
     products = [{"product": "S5735", "qty": 5}, {"product": "AR611", "qty": 1}, {"product": "S5735", "qty": 2},
                 {"product": "", "qty": None}]
     assert raw.product_summary(products) == [("S5735", 7), ("AR611", 1), ("（未注明型号）", 0)]
+
+
+def test_plan_english_and_products():
+    rec = _record(lang="en", product_lines=["S5735 <A>×5", "AR611×1"], customer="Acme")
+    items = by_node(planner.plan([rec], SETTINGS, set(), {"expiry_calendar": True}, NOW))
+    m3 = items[("email", "m3")]
+    assert m3["subject"] == "Acme | $4.6W Warranty Expiry | Renewal Reminder"
+    assert "Contract Expiry Reminder" in m3["body"] and "3-month reminder (90 days to expiry)" in m3["body"]
+    assert "S5735 &lt;A&gt;×5<br>AR611×1" in m3["body"] and "合同编号" not in m3["body"]
+    assert m3["node_label"] == "提前3个月提醒"
+    cal = items[("calendar", "calendar")]
+    assert cal["subject"].startswith("[Warranty Expiry] Acme") and "Products: S5735 <A>×5; AR611×1" in cal["body"]
+
+    zh = by_node(planner.plan([_record(product_lines=["AR611×1"])], SETTINGS, set(), None, NOW))[("email", "m3")]
+    assert "<td>AR611×1</td>" in zh["body"] and "{products}" not in zh["body"]
+
+
+def test_parse_language_and_products_columns():
+    content = make_xlsx([
+        ["代表处", "最终客户", "合同名称", "过保时间", "维保类型", "合同号", "金额", "邮箱名单", "邮件语言",
+         "型号数", "报价项数量", "产品明细（型号×报价项数量）"],
+        ["南非", "A", "合同A", "2027-03-01", "Hi-Care", "C1", 30000, "a@x.com", "English", 2, 6, "S5735×5；AR611×1"],
+        ["南非", "B", "合同B", "2027-03-01", "Hi-Care", "C2", 30000, "b@x.com", None, 1, 1, ""],
+    ])
+    records, _ = parser.parse_file("filled.xlsx", content)
+    assert records[0]["lang"] == "en" and records[0]["product_lines"] == ["S5735×5", "AR611×1"]
+    assert records[1]["lang"] == "zh" and records[1]["product_lines"] == []
+
+
+def test_office_en():
+    assert planner.office_en("南非代表处") == "South Africa Representative Office"
+    assert planner.office_en("东非多国管理部") == "East Africa Multi-Country Management Dept."
+    assert planner.office_en("火星代表处") == "火星代表处"

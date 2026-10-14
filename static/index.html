@@ -65,13 +65,14 @@
         <li>在第②步点击“下载待填写名单”，打开 Excel 的【提醒名单】工作表。</li>
         <li>只填写黄色的 <b>邮箱名单</b> 列，其他列不要改。一行就是一条提醒（合同号 + 过保时间 + 维保类型）。</li>
         <li>多个收件人用英文分号 <code>;</code> 分隔，可以填邮箱，也可以填 Outlook 能识别的“姓名 工号”。</li>
+        <li><b>邮件语言</b> 列默认“中文”，需要发英文版（邮件和日历邀请）的行下拉选择 <b>English</b>。</li>
         <li>留空的行不会发送；不需要提醒的行可以整行删除。保存后在下面上传。</li>
       </ol>
       <table class="data example">
-        <thead><tr><th>代表处</th><th>最终客户</th><th>合同名称</th><th>过保时间</th><th>维保类型</th><th>合同号</th><th class="num">金额</th><th class="fillme">邮箱名单（填这一列）</th></tr></thead>
+        <thead><tr><th>代表处</th><th>最终客户</th><th>合同名称</th><th>过保时间</th><th>维保类型</th><th>合同号</th><th class="num">金额</th><th class="fillme">邮箱名单（填这一列）</th><th class="fillme">邮件语言</th></tr></thead>
         <tbody>
-          <tr><td>南非代表处</td><td>City of Tshwane</td><td>PIN CL SA COT_Brilliantel_Services</td><td>2027-03-31</td><td>Hi-Care</td><td>0Y071024000326</td><td class="num">46,000</td><td class="fillme">zhangsan@huawei.com;lisi@huawei.com</td></tr>
-          <tr><td>尼日利亚代表处</td><td>Access Bank Plc</td><td>Nigeria_Service Renewal</td><td>2027-06-30</td><td>Warranty</td><td>0Y056625000932</td><td class="num">38,000</td><td class="fillme">wangwu 00123456;zhaoliu@huawei.com</td></tr>
+          <tr><td>南非代表处</td><td>City of Tshwane</td><td>PIN CL SA COT_Brilliantel_Services</td><td>2027-03-31</td><td>Hi-Care</td><td>0Y071024000326</td><td class="num">46,000</td><td class="fillme">zhangsan@huawei.com;lisi@huawei.com</td><td class="fillme">中文</td></tr>
+          <tr><td>尼日利亚代表处</td><td>Access Bank Plc</td><td>Nigeria_Service Renewal</td><td>2027-06-30</td><td>Warranty</td><td>0Y056625000932</td><td class="num">38,000</td><td class="fillme">wangwu 00123456;zhaoliu@huawei.com</td><td class="fillme">English</td></tr>
         </tbody>
       </table>
       <p class="muted small">以上为示例。系统会记住每个客户填写过的邮箱，下次下载名单时自动带出。旧版“维保日历数据.xlsx”格式也可以直接上传。</p>
@@ -141,10 +142,17 @@
       </div>
 
       <h2>模板</h2>
-      <p class="muted">可用占位符：{office} {customer} {contract_name} {expiry} {service_type} {contract_no} {amount} {amount_fmt} {node_label} {days_left} {days_text}。清空后保存即恢复默认模板。</p>
-      <label>邮件标题<input type="text" name="subject_template"></label>
-      <label>日历邀请标题<input type="text" name="calendar_subject_template"></label>
-      <label>邮件正文（HTML）<textarea name="body_template" rows="16"></textarea></label>
+      <p class="muted">可用占位符：{office} {customer} {contract_name} {expiry} {service_type} {contract_no} {amount} {amount_fmt} {products} {node_label} {days_left} {days_text}。清空后保存即恢复默认模板。</p>
+      <details open><summary><b>中文版</b></summary>
+        <label>邮件标题<input type="text" name="subject_template"></label>
+        <label>日历邀请标题<input type="text" name="calendar_subject_template"></label>
+        <label>邮件正文（HTML）<textarea name="body_template" rows="12"></textarea></label>
+      </details>
+      <details><summary><b>英文版（English）</b></summary>
+        <label>邮件标题<input type="text" name="subject_template_en"></label>
+        <label>日历邀请标题<input type="text" name="calendar_subject_template_en"></label>
+        <label>邮件正文（HTML）<textarea name="body_template_en" rows="12"></textarea></label>
+      </details>
 
       <fieldset>
         <legend>SMTP（仅在发信方式为 SMTP 时使用）</legend>

@@ -141,7 +141,8 @@ def transform(rows, options=None, today=None):
             for p in g["products"]:
                 excluded.append({**p, "reason": f"合同合计目录价 ${g['amount']:,.0f} 未超过门槛"})
             continue
-        records.append({**g, "id": len(records), "remind_days": None, "emails": []})
+        records.append({**g, "id": len(records), "remind_days": None, "emails": [], "lang": "zh",
+                        "product_lines": [f"{n}×{q}" for n, q in product_summary(g["products"])]})
     funnel["records"] = len(records)
 
     period = {"start": start.isoformat(), "end": end.isoformat(), "min_amount": min_amount,
