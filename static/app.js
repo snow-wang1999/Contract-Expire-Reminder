@@ -1,6 +1,9 @@
 "use strict";
 
-const state = { rawFile: null, records: [], report: null, funnel: null, source: "", plan: [], settings: null };
+const state = {
+  rawFile: null, records: [], report: null, funnel: null, source: "", rawSource: false,
+  plan: [], settings: null, lastImport: null, lastUpload: null,
+};
 
 const $ = (sel) => document.querySelector(sel);
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -16,8 +19,8 @@ async function api(path, body) {
   const opts = body instanceof FormData ? { method: "POST", body }
     : body !== undefined ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {};
   const res = await fetch(path, opts);
-  const data = await res.json().catch(() => ({ error: `服务器错误 (${res.status})` }));
-  if (!res.ok) throw new Error(data.error || `请求失败 (${res.status})`);
+  const data = await res.json().catch(() => ({ error: t("服务器错误 ({status})", { status: res.status }) }));
+  if (!res.ok) throw new Error(data.error || t("请求失败 ({status})", { status: res.status }));
   return data;
 }
 
@@ -36,18 +39,22 @@ function setupDrop(zoneSel, inputSel, handler) {
   zone.addEventListener("drop", (e) => { e.preventDefault(); zone.classList.remove("over"); if (e.dataTransfer.files[0]) handler(e.dataTransfer.files[0]); });
 }
 
+// 服务器返回的提示是中文，英文界面下原样显示
 function warningsHtml(list) {
   if (!list.length) return "";
-  return `<details class="warn" ${list.length <= 5 ? "open" : ""}><summary>${list.length} 条提示</summary><ul>${list.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></details>`;
+  return `<details class="warn" ${list.length <= 5 ? "open" : ""}><summary>${esc(t("{n} 条提示", { n: list.length }))}</summary><ul>${list.map((w) => `<li>${esc(w)}</li>`).join("")}</ul></details>`;
 }
 
-function setRecords(records, report, source) {
-  Object.assign(state, { records, report, source, plan: [] });
+function setRecords(records, report, source, rawSource) {
+  Object.assign(state, { records, report, source, rawSource, plan: [] });
   renderReport();
-  $("#planTable").innerHTML = `<p class="empty">点击“生成提醒计划”</p>`;
+  $("#planTable").innerHTML = `<p class="empty">${esc(t("点击“生成提醒计划”"))}</p>`;
   $("#planSummary").textContent = "";
   updateSendBtn();
 }
+
+const classLabel = (name) => (name ? name : t("（未填写）"));
+const groupName = (name) => (name === "（未填写）" ? t("（未填写）") : name);
 
 /* ---------- ① 导入原始数据 ---------- */
 async function importRaw(file) {
@@ -62,25 +69,35 @@ async function importRaw(file) {
   fd.append("include_dc_energy", $("#optDc").checked);
   fd.append("mode", currentMode());
   fd.append("channel_non_key_only", $("#optNonKey").checked);
-  $("#rawResult").innerHTML = `<p class="muted">正在处理 ${esc(file.name)} …</p>`;
+  $("#rawResult").innerHTML = `<p class="muted">${esc(t("正在处理 {name} …", { name: file.name }))}</p>`;
   try {
     const data = await api("/api/raw", fd);
     state.funnel = data.funnel;
-    setRecords(data.records, data.report, `${data.filename}（原始数据）`);
-    const f = data.funnel;
-    const prefilled = data.records.filter((r) => r.emails.length).length;
-    $("#rawResult").innerHTML = `
-      <p class="ok">已处理 <b>${esc(data.filename)}</b>：得到 <b>${f.records}</b> 条需要提醒的合同（过保 ${esc(f.period.start)} ~ ${esc(f.period.end)}，合计目录价 &gt; ${money(f.period.min_amount)}）。${prefilled ? `其中 ${prefilled} 条已按客户带出上次填写的邮箱。` : ""}</p>
-      ${funnelHtml(f)}${warningsHtml(data.warnings)}
-      <div class="toolbar"><button onclick="showTab('report')">查看分析报告 →</button>
-      <button class="secondary" onclick="location.href='/api/template'">下载待填写名单 (Excel)</button>
-      <span class="muted small">修改上面的参数后，可点击 <button class="link" id="rerun">按新参数重新整理</button></span></div>`;
-    $("#rerun").addEventListener("click", () => importRaw(state.rawFile));
+    state.lastImport = data;
+    setRecords(data.records, data.report, data.filename, true);
+    renderRawResult();
   } catch (e) {
+    state.lastImport = null;
     $("#rawResult").innerHTML = `<p class="err">${esc(e.message)}</p>`;
   }
 }
 setupDrop("#rawDrop", "#rawInput", importRaw);
+
+function renderRawResult() {
+  const data = state.lastImport;
+  if (!data) return;
+  const f = data.funnel;
+  const prefilled = data.records.filter((r) => r.emails.length).length;
+  const summary = t("已处理 <b>{file}</b>：得到 <b>{n}</b> 条需要提醒的合同（过保 {start} ~ {end}，合计目录价 &gt; {min}）。",
+    { file: esc(data.filename), n: f.records, start: esc(f.period.start), end: esc(f.period.end), min: money(f.period.min_amount) });
+  $("#rawResult").innerHTML = `
+    <p class="ok">${summary}${prefilled ? esc(t("其中 {n} 条已带出上次填写的邮箱。", { n: prefilled })) : ""}</p>
+    ${funnelHtml(f)}${warningsHtml(data.warnings)}
+    <div class="toolbar"><button onclick="showTab('report')">${esc(t("查看分析报告 →"))}</button>
+    <button class="secondary" onclick="location.href='/api/template'">${esc(t("下载待填写名单 (Excel)"))}</button>
+    <span class="muted small">${esc(t("修改上面的参数后，可点击"))} <button class="link" id="rerun">${esc(t("按新参数重新整理"))}</button></span></div>`;
+  $("#rerun").addEventListener("click", () => importRaw(state.rawFile));
+}
 
 function currentMode() {
   return document.querySelector("input[name=mode]:checked").value;
@@ -90,11 +107,10 @@ function updateModeUi() {
   const channel = currentMode() === "channel";
   $("#channelOpt").hidden = !channel;
   $("#modeHint").textContent = channel
-    ? "按签约客户、二代分组排列，收件人填写总代或二代的联系人；邮件不含金额和内部信息，默认英文。"
-    : "按客户分类（卓越 > 战略 > 核心 > 价值 > 商业）排列，同一客户相邻；默认中文。";
+    ? t("按签约客户、二代分组排列，收件人填写总代或二代的联系人；同一伙伴的合同合并成一封邮件，不含金额和内部信息，默认英文。")
+    : t("按客户分类（卓越 > 战略 > 核心 > 价值 > 商业）排列，同一客户相邻；默认中文。");
 }
 document.querySelectorAll("input[name=mode]").forEach((r) => r.addEventListener("change", updateModeUi));
-updateModeUi();
 
 const isChannel = () => state.records.some((r) => r.mode === "channel");
 const groupOf = (r) => (r.mode === "channel" ? `${r.signer}|${r.tier2}` : r.customer);
@@ -106,39 +122,42 @@ function bandClasses(records) {
 }
 
 function funnelHtml(f) {
+  const included = t("（已选择包含）");
   const rows = [
-    ["原始数据行数", f.rows, "", true],
-    ["过保时间不在时间段内", -f.out_of_period, ""],
-    ["已 EOS 设备", -f.eos, f.period.include_eos ? "（已选择包含）" : ""],
-    ["资产状态为不再拓展", -f.no_expand, f.period.include_no_expand ? "（已选择包含）" : ""],
-    ["数据中心能源及关键供电", -f.dc_energy, f.period.include_dc_energy ? "（已选择包含）" : ""],
-    ["卓越 / 战略 / 核心客户", -(f.key_account || 0), ""],
-    ["缺少合同号或日期", -f.bad_row, ""],
-    ["按 合同号+过保时间+服务类型 合并后", f.groups, "条", true],
-    [`合计目录价未超过 ${money(f.period.min_amount)}`, -f.below_min, ""],
-    ["最终需要提醒", f.records, "条", true],
+    [t("原始数据行数"), f.rows, "", true],
+    [t("过保时间不在时间段内"), -f.out_of_period, ""],
+    [t("已 EOS 设备"), -f.eos, f.period.include_eos ? included : ""],
+    [t("资产状态为不再拓展"), -f.no_expand, f.period.include_no_expand ? included : ""],
+    [t("数据中心能源及关键供电"), -f.dc_energy, f.period.include_dc_energy ? included : ""],
+    [t("卓越 / 战略 / 核心客户"), -(f.key_account || 0), ""],
+    [t("缺少合同号或日期"), -f.bad_row, ""],
+    [t("按 合同号+过保时间+服务类型 合并后"), f.groups, t("条"), true],
+    [t("合计目录价未超过 {min}", { min: money(f.period.min_amount) }), -f.below_min, ""],
+    [t("最终需要提醒"), f.records, t("条"), true, true],
   ];
-  return `<table class="data funnel"><tbody>${rows.filter(([, v, , always]) => always || v !== 0).map(([k, v, note]) =>
-    `<tr class="${k.startsWith("最终") ? "strong" : ""}"><td>${esc(k)}</td><td class="num">${v < 0 ? `−${-v}` : v}</td><td class="muted">${esc(note)}</td></tr>`).join("")}</tbody></table>`;
+  return `<table class="data funnel"><tbody>${rows.filter(([, v, , always]) => always || v !== 0).map(([k, v, note, , strong]) =>
+    `<tr class="${strong ? "strong" : ""}"><td>${esc(k)}</td><td class="num">${v < 0 ? `−${-v}` : v}</td><td class="muted">${esc(note)}</td></tr>`).join("")}</tbody></table>`;
 }
 
 /* ---------- ② 报告 ---------- */
-function bars(rows) {
+function bars(rows, nameOf = (r) => r.name) {
   const max = Math.max(1, ...rows.map((r) => r.count));
   return `<table class="bars">${rows.map((r) => `<tr>
-    <th>${esc(r.name)}</th>
+    <th>${esc(nameOf(r))}</th>
     <td class="barcell"><span class="bar" style="width:${(r.count / max) * 100}%"></span></td>
     <td class="num">${r.count}</td><td class="num">${money(r.amount)}</td></tr>`).join("")}</table>`;
 }
 
-function groupTable(rows, title = "名称") {
-  return `<table class="data"><thead><tr><th>${title}</th><th class="num">提醒条数</th><th class="num">目录价合计</th><th>最早过保</th></tr></thead><tbody>
-    ${rows.map((g) => `<tr><td>${esc(g.name)}</td><td class="num">${g.count}</td><td class="num">${money(g.amount)}</td><td>${esc(g.nearest || "-")}</td></tr>`).join("")}
+function groupTable(rows, title) {
+  return `<table class="data"><thead><tr><th>${esc(title)}</th><th class="num">${esc(t("提醒条数"))}</th><th class="num">${esc(t("目录价合计"))}</th><th>${esc(t("最早过保"))}</th></tr></thead><tbody>
+    ${rows.map((g) => `<tr><td>${esc(groupName(g.name))}</td><td class="num">${g.count}</td><td class="num">${money(g.amount)}</td><td>${esc(g.nearest || "-")}</td></tr>`).join("")}
     </tbody></table>`;
 }
 
+const th = (...names) => names.map((n) => `<th>${esc(t(n))}</th>`).join("");
+
 function detailHead() {
-  return `<tr>${isChannel() ? "<th>签约客户</th><th>二代</th>" : ""}<th>代表处</th><th>客户分类</th><th>最终客户</th><th>合同名称</th><th>过保时间</th><th>维保类型</th><th>合同号</th><th class="num">金额</th><th>邮箱名单</th></tr>`;
+  return `<tr>${isChannel() ? th("签约客户", "二代") : ""}${th("代表处", "客户分类", "最终客户", "合同名称", "过保时间", "维保类型", "合同号")}<th class="num">${esc(t("金额"))}</th>${th("邮箱名单")}</tr>`;
 }
 
 function detailRows(records) {
@@ -146,36 +165,37 @@ function detailRows(records) {
   return records.map((r, i) => `<tr class="${bands[i]}">${channel ? `<td>${esc(r.signer)}</td><td>${esc(r.tier2)}</td>` : ""}
     <td>${esc(r.office)}</td><td class="small">${esc(r.customer_class)}</td><td>${esc(r.customer)}</td><td>${esc(r.contract_name)}</td>
     <td class="nowrap">${esc(r.expiry)}</td><td>${esc(r.service_type)}</td><td class="nowrap">${esc(r.contract_no)}</td><td class="num">${money(r.amount)}</td>
-    <td class="small">${r.emails.length ? esc(r.emails.join("; ")) : '<span class="muted">待填写</span>'}</td></tr>`).join("");
+    <td class="small">${r.emails.length ? esc(r.emails.join("; ")) : `<span class="muted">${esc(t("待填写"))}</span>`}</td></tr>`).join("");
 }
 
 function renderReport() {
   const rp = state.report;
   if (!rp) return;
-  const types = rp.by_type.map((t) => `${esc(t.name)} ${t.count}`).join(" · ");
-  $("#reportMeta").textContent = `数据：${state.source} · 统计日期：${rp.today}`;
+  const types = rp.by_type.map((x) => `${esc(groupName(x.name))} ${x.count}`).join(" · ");
+  const source = state.rawSource ? t("{file}（原始数据）", { file: state.source }) : state.source;
+  $("#reportMeta").textContent = t("数据：{source} · 统计日期：{date}", { source, date: rp.today });
   $("#report").innerHTML = `
     <div class="kpis">
-      <div class="kpi"><span>需要提醒</span><b>${rp.total.count}</b><small>${rp.total.offices} 个代表处 · ${rp.total.customers} 个客户</small></div>
-      <div class="kpi"><span>目录价合计</span><b>${money(rp.total.amount)}</b></div>
-      <div class="kpi"><span>按维保类型</span><b class="kpi-sm">${types || "-"}</b></div>
-      <div class="kpi warnk"><span>待填写邮箱</span><b>${state.records.filter((r) => !r.emails.length).length}</b></div>
+      <div class="kpi"><span>${esc(t("需要提醒"))}</span><b>${rp.total.count}</b><small>${esc(t("{o} 个代表处 · {c} 个客户", { o: rp.total.offices, c: rp.total.customers }))}</small></div>
+      <div class="kpi"><span>${esc(t("目录价合计"))}</span><b>${money(rp.total.amount)}</b></div>
+      <div class="kpi"><span>${esc(t("按维保类型"))}</span><b class="kpi-sm">${types || "-"}</b></div>
+      <div class="kpi warnk"><span>${esc(t("待填写邮箱"))}</span><b>${state.records.filter((r) => !r.emails.length).length}</b></div>
     </div>
-    ${state.funnel && state.source.endsWith("（原始数据）") ? `<div class="card"><h2>筛选过程</h2>${funnelHtml(state.funnel)}</div>` : ""}
+    ${state.funnel && state.rawSource ? `<div class="card"><h2>${esc(t("筛选过程"))}</h2>${funnelHtml(state.funnel)}</div>` : ""}
     <div class="cols">
-      <div class="card"><h2>按过保月份</h2>${bars(rp.by_month)}</div>
-      <div class="card"><h2>按维保类型</h2>${bars(rp.by_type)}</div>
-    </div>
-    <div class="cols">
-      <div class="card"><h2>按客户分类</h2>${bars(rp.by_class)}</div>
-      <div class="card"><h2>按代表处</h2>${groupTable(rp.by_office, "代表处")}</div>
+      <div class="card"><h2>${esc(t("按过保月份"))}</h2>${bars(rp.by_month)}</div>
+      <div class="card"><h2>${esc(t("按维保类型"))}</h2>${bars(rp.by_type, (r) => groupName(r.name))}</div>
     </div>
     <div class="cols">
-      ${rp.by_signer.length ? `<div class="card"><h2>按签约客户（总代）</h2>${groupTable(rp.by_signer, "签约客户")}</div>` : ""}
-      <div class="card"><h2>目录价前 10 客户</h2>${groupTable(rp.by_customer, "最终客户")}</div>
+      <div class="card"><h2>${esc(t("按客户分类"))}</h2>${bars(rp.by_class, (r) => (LANG === "en" ? classLabel(r.raw) : r.name))}</div>
+      <div class="card"><h2>${esc(t("按代表处"))}</h2>${groupTable(rp.by_office, t("代表处"))}</div>
     </div>
-    <div class="card"><h2>${isChannel() ? "渠道续保通知名单" : "提醒名单"}（过保目录价 &gt; ${money(state.funnel?.period.min_amount ?? 20000)}）</h2>
-      <div class="toolbar noprint"><input type="search" id="detailFilter" placeholder="搜索客户 / 签约客户 / 合同 / 代表处"></div>
+    <div class="cols">
+      ${rp.by_signer.length ? `<div class="card"><h2>${esc(t("按签约客户（总代）"))}</h2>${groupTable(rp.by_signer, t("签约客户"))}</div>` : ""}
+      <div class="card"><h2>${esc(t("目录价前 10 客户"))}</h2>${groupTable(rp.by_customer, t("最终客户"))}</div>
+    </div>
+    <div class="card"><h2>${esc(t(isChannel() ? "渠道续保通知名单" : "提醒名单"))}${esc(t("（过保目录价 > {min}）", { min: money(state.funnel?.period.min_amount ?? 20000) }))}</h2>
+      <div class="toolbar noprint"><input type="search" id="detailFilter" placeholder="${esc(t("搜索客户 / 签约客户 / 合同 / 代表处"))}"></div>
       <table class="data"><thead>${detailHead()}</thead>
       <tbody id="detailBody">${detailRows(rp.records)}</tbody></table></div>`;
   $("#detailFilter").addEventListener("input", (e) => {
@@ -185,21 +205,22 @@ function renderReport() {
 }
 
 $("#downloadTemplate").addEventListener("click", () => {
-  if (!state.funnel) return alert("请先在第①步导入原始数据");
+  if (!state.funnel) return alert(t("请先在第①步导入原始数据"));
   location.href = "/api/template";
 });
 
 $("#exportReport").addEventListener("click", async () => {
-  if (!state.report) return alert("请先导入数据");
+  if (!state.report) return alert(t("请先导入数据"));
   const css = await (await fetch("/static/style.css")).text();
   const clone = $("#report").cloneNode(true);
   clone.querySelectorAll(".noprint").forEach((n) => n.remove());
   clone.querySelector("#detailBody").innerHTML = detailRows(state.report.records);
-  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>过保分析报告 ${state.report.today}</title>
-    <style>${css}</style></head><body><main><h1>过保分析报告</h1><p class="muted">${esc($("#reportMeta").textContent)}</p>${clone.innerHTML}</main></body></html>`;
+  const title = t("过保分析报告");
+  const html = `<!doctype html><html lang="${LANG === "en" ? "en" : "zh-CN"}"><head><meta charset="utf-8"><title>${esc(title)} ${state.report.today}</title>
+    <style>${css}</style></head><body><main><h1>${esc(title)}</h1><p class="muted">${esc($("#reportMeta").textContent)}</p>${clone.innerHTML}</main></body></html>`;
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([html], { type: "text/html" }));
-  a.download = `过保分析报告_${state.report.today}.html`;
+  a.download = `${title.replace(/\s+/g, "_")}_${state.report.today}.html`;
   a.click();
   URL.revokeObjectURL(a.href);
 });
@@ -208,27 +229,36 @@ $("#exportReport").addEventListener("click", async () => {
 async function uploadFilled(file) {
   const fd = new FormData();
   fd.append("file", file);
-  $("#fillResult").innerHTML = `<p class="muted">正在读取 ${esc(file.name)} …</p>`;
+  $("#fillResult").innerHTML = `<p class="muted">${esc(t("正在读取 {name} …", { name: file.name }))}</p>`;
   try {
     const data = await api("/api/upload", fd);
-    setRecords(data.records, data.report, data.filename);
-    const filled = data.records.filter((r) => r.emails.length).length;
-    $("#fillResult").innerHTML = `<p class="ok">已读取 <b>${esc(data.filename)}</b>：${data.records.length} 条提醒，已填写邮箱 <b>${filled}</b> 条。</p>
-      ${warningsHtml(data.warnings)}<div class="toolbar"><button onclick="showTab('send')">下一步：提醒计划 →</button></div>`;
+    state.lastUpload = data;
+    setRecords(data.records, data.report, data.filename, false);
+    renderFillResult();
     renderFillTable();
   } catch (e) {
+    state.lastUpload = null;
     $("#fillResult").innerHTML = `<p class="err">${esc(e.message)}</p>`;
   }
 }
 setupDrop("#fillDrop", "#fillInput", uploadFilled);
 
+function renderFillResult() {
+  const data = state.lastUpload;
+  if (!data) return;
+  const filled = data.records.filter((r) => r.emails.length).length;
+  $("#fillResult").innerHTML = `<p class="ok">${t("已读取 <b>{file}</b>：{n} 条提醒，已填写邮箱 <b>{filled}</b> 条。", { file: esc(data.filename), n: data.records.length, filled })}</p>
+    ${warningsHtml(data.warnings)}<div class="toolbar"><button onclick="showTab('send')">${esc(t("下一步：提醒计划 →"))}</button></div>`;
+}
+
 function renderFillTable() {
+  if (!state.lastUpload) return;
   const bands = bandClasses(state.records), channel = isChannel();
-  $("#fillTable").innerHTML = `<p class="muted small">可以在下表直接修改邮箱名单和邮件语言（只对本次发送生效）。同一${channel ? "签约客户 / 二代" : "客户"}的行底色相同。</p>
-    <table class="data"><thead><tr>${channel ? "<th>签约客户</th><th>二代</th>" : ""}<th>客户分类</th><th>最终客户</th><th>合同号</th><th>过保时间</th><th>维保类型</th><th class="num">金额</th><th>产品型号</th><th>邮箱名单</th><th>邮件语言</th></tr></thead><tbody>
+  $("#fillTable").innerHTML = `<p class="muted small">${esc(t(channel ? "可以在下表直接修改邮箱名单和邮件语言（只对本次发送生效）。同一签约客户 / 二代的行底色相同。" : "可以在下表直接修改邮箱名单和邮件语言（只对本次发送生效）。同一客户的行底色相同。"))}</p>
+    <table class="data"><thead><tr>${channel ? th("签约客户", "二代") : ""}${th("客户分类", "最终客户", "合同号", "过保时间", "维保类型")}<th class="num">${esc(t("金额"))}</th>${th("产品型号", "邮箱名单", "邮件语言")}</tr></thead><tbody>
     ${state.records.map((r, i) => `<tr class="${bands[i]}">${channel ? `<td>${esc(r.signer)}</td><td>${esc(r.tier2)}</td>` : ""}<td class="small">${esc(r.customer_class)}</td><td>${esc(r.customer)}</td><td class="nowrap">${esc(r.contract_no)}</td><td class="nowrap">${esc(r.expiry)}</td><td>${esc(r.service_type)}</td>
       <td class="num">${money(r.amount)}</td><td class="small">${(r.product_lines || []).map(esc).join("<br>") || "-"}</td>
-      <td><input class="wide ${r.emails.length ? "" : "missing"}" data-rec="${i}" value="${esc(r.emails.join("; "))}" placeholder="未填写，不会发送"></td>
+      <td><input class="wide ${r.emails.length ? "" : "missing"}" data-rec="${i}" value="${esc(r.emails.join("; "))}" placeholder="${esc(t("未填写，不会发送"))}"></td>
       <td><select data-lang="${i}"><option value="zh" ${r.lang === "en" ? "" : "selected"}>中文</option><option value="en" ${r.lang === "en" ? "selected" : ""}>English</option></select></td></tr>`).join("")}
     </tbody></table>`;
 }
@@ -245,6 +275,11 @@ $("#fillTable").addEventListener("input", (e) => {
 /* ---------- ④ 计划与发送 ---------- */
 const KIND_TEXT = { email: "邮件", calendar: "日历邀请" };
 const ACTION_TEXT = { now: "立即", defer: "定时", skip: "跳过" };
+const NODE_TEXT = { m6: "提前6个月提醒", m3: "提前3个月提醒", m1: "提前1个月提醒", immediate: "即时提醒", calendar: "过保当日日历" };
+const REASON_TEXT = {
+  sent_before: "该节点之前已发送", defer: "{days} 天后定时发送", past: "节点日期 {date} 已过", now: "立即发送",
+  now_merged: "立即发送（合并 {n} 个节点）", expired: "过保日期已过", calendar_now: "立即发出日历邀请", no_recipients: "未填写收件人",
+};
 
 function planOptions() {
   const opts = {};
@@ -253,46 +288,65 @@ function planOptions() {
   return opts;
 }
 
+function updatePlanHint() {
+  $("#planHint").textContent = t("定时邮件在节点当天 {hour} 点由 Outlook 发出（需开启 Outlook 或使用 Exchange 账号）。渠道通知的节点提前到当月 1 日，同一伙伴同一天的合同合并成一封。已发送/已排定过的节点会自动跳过，可放心重复运行。",
+    { hour: state.settings?.send_hour ?? 9 });
+}
+
 $("#buildPlan").addEventListener("click", async () => {
-  if (!state.records.length) return alert("请先导入数据并上传收件人名单");
+  if (!state.records.length) return alert(t("请先导入数据并上传收件人名单"));
   const opts = planOptions();
-  if (!["m6", "m3", "m1", "immediate", "expiry_calendar"].some((k) => opts[k])) return alert("请至少选择一种提醒频率");
+  if (!["m6", "m3", "m1", "immediate", "expiry_calendar"].some((k) => opts[k])) return alert(t("请至少选择一种提醒频率"));
   try {
     state.plan = (await api("/api/plan", { records: state.records, options: opts })).items;
     renderPlan();
   } catch (e) { alert(e.message); }
 });
 
+function contractCell(i) {
+  if (i.count <= 1) return esc(i.contract_nos[0]);
+  return `${esc(i.contract_nos[0])}<div class="small muted" title="${esc(i.contract_nos.join(", "))}">${esc(t("等 {n} 个合同", { n: i.count }))}</div>`;
+}
+
 function renderPlan() {
   const p = state.plan;
+  if (!p.length) return;
   const count = (f) => p.filter(f).length;
-  $("#planSummary").textContent = `共 ${p.length} 项：立即 ${count((i) => i.action === "now")} · 定时 ${count((i) => i.action === "defer")} · 跳过 ${count((i) => i.action === "skip")}（其中未填收件人 ${count((i) => i.reason === "未填写收件人")}，之前已发送 ${count((i) => i.already_sent)}）`;
+  $("#planSummary").textContent = t("共 {n} 项：立即 {now} · 定时 {defer} · 跳过 {skip}（其中未填收件人 {missing}，之前已发送 {sent}）", {
+    n: p.length, now: count((i) => i.action === "now"), defer: count((i) => i.action === "defer"),
+    skip: count((i) => i.action === "skip"), missing: count((i) => i.reason_code === "no_recipients"), sent: count((i) => i.already_sent),
+  });
   const hide = $("#hideSkipped").checked;
   const rows = p.map((i, idx) => ({ i, idx })).filter(({ i }) => !hide || i.result || (i.action !== "skip" && !i.already_sent));
-  $("#planTable").innerHTML = rows.length ? `<table class="data"><thead><tr><th></th><th>合同号</th><th>最终客户</th><th>维保类型</th><th>过保时间</th><th class="num">金额</th><th>内容</th><th>发送</th><th>收件人</th><th>结果</th><th></th></tr></thead><tbody>
+  $("#planTable").innerHTML = rows.length ? `<table class="data"><thead><tr><th></th>${th("合同号", "最终客户", "维保类型", "过保时间")}<th class="num">${esc(t("金额"))}</th>${th("内容", "发送", "收件人", "结果")}<th></th></tr></thead><tbody>
     ${rows.map(({ i, idx }) => `<tr class="${i.action === "skip" || i.already_sent ? "dim" : ""}">
       <td><input type="checkbox" data-idx="${idx}" ${i.selected ? "checked" : ""} ${i.action === "skip" ? "disabled" : ""}></td>
-      <td class="nowrap">${esc(i.contract_no)}</td><td>${esc(i.customer)}<div class="small muted">${esc([i.customer_class, i.mode === "channel" ? `渠道：${i.tier2 || i.signer}` : ""].filter(Boolean).join(" · "))}</div></td><td>${esc(i.service_type)}</td><td class="nowrap">${esc(i.expiry)}</td><td class="num">${money(i.amount)}</td>
-      <td class="nowrap">${KIND_TEXT[i.kind]} <span class="pill">${i.lang === "en" ? "EN" : "中"}</span><div class="small muted">${esc(i.node_label)}</div></td>
-      <td><span class="pill a-${i.action}">${ACTION_TEXT[i.action]}</span><div class="small muted">${esc(i.send_at ? i.send_at.replace("T", " ") : i.reason)}</div></td>
-      <td class="small">${esc(i.to.join("; ")) || '<span class="err">未填写</span>'}</td>
+      <td class="nowrap">${contractCell(i)}</td>
+      <td>${esc(i.customer)}<div class="small muted">${esc([i.count <= 1 ? i.customer_class : "", i.mode === "channel" ? t("渠道：{p}", { p: i.partner }) : ""].filter(Boolean).join(" · "))}</div></td>
+      <td>${esc(i.service_type)}</td><td class="nowrap">${esc(i.expiry)}</td><td class="num">${money(i.amount)}</td>
+      <td class="nowrap">${esc(t(KIND_TEXT[i.kind]))} <span class="pill">${i.lang === "en" ? "EN" : "中"}</span><div class="small muted">${esc(t(NODE_TEXT[i.label_node]))}</div></td>
+      <td><span class="pill a-${i.action}">${esc(t(ACTION_TEXT[i.action]))}</span><div class="small muted">${esc(i.send_at ? i.send_at.replace("T", " ") : t(REASON_TEXT[i.reason_code], i.reason_params))}</div></td>
+      <td class="small">${esc(i.to.join("; ")) || `<span class="err">${esc(t("未填写"))}</span>`}</td>
       <td class="small">${resultHtml(i)}</td>
-      <td class="nowrap"><button class="link" data-preview="${idx}">预览</button></td></tr>`).join("")}
-    </tbody></table>` : `<p class="empty">没有可发送的提醒${hide ? "（已隐藏跳过项）" : ""}</p>`;
+      <td class="nowrap"><button class="link" data-preview="${idx}">${esc(t("预览"))}</button></td></tr>`).join("")}
+    </tbody></table>` : `<p class="empty">${esc(t(hide ? "没有可发送的提醒（已隐藏跳过项）" : "没有可发送的提醒"))}</p>`;
   updateSendBtn();
 }
 $("#hideSkipped").addEventListener("change", () => { if (state.plan.length) renderPlan(); });
 
-const RESULT_TEXT = { ok: '<span class="ok">✔ 成功</span>', dryrun: '<span class="muted">模拟成功</span>', skipped: '<span class="muted">未发送</span>', failed: '<span class="err">✘ 失败</span>' };
+const RESULT_TEXT = { ok: ["ok", "✔ 成功"], dryrun: ["muted", "模拟成功"], skipped: ["muted", "未发送"], failed: ["err", "✘ 失败"] };
 
 function resultHtml(i) {
-  if (i.result) return `${RESULT_TEXT[i.result.status]}${i.result.error ? `<div class="err small">${esc(i.result.error)}</div>` : ""}`;
-  return i.already_sent ? '<span class="muted">之前已发送</span>' : "";
+  if (i.result) {
+    const [cls, text] = RESULT_TEXT[i.result.status];
+    return `<span class="${cls}">${esc(t(text))}</span>${i.result.error ? `<div class="err small">${esc(i.result.error)}</div>` : ""}`;
+  }
+  return i.already_sent ? `<span class="muted">${esc(t("之前已发送"))}</span>` : "";
 }
 
 function updateSendBtn() {
   const n = state.plan.filter((i) => i.selected).length;
-  $("#sendBtn").textContent = `发送选中 (${n})`;
+  $("#sendBtn").textContent = t("发送选中 ({n})", { n });
   $("#sendBtn").disabled = n === 0;
 }
 
@@ -303,8 +357,10 @@ $("#planTable").addEventListener("click", (e) => {
   const idx = e.target.dataset.preview;
   if (idx === undefined) return;
   const i = state.plan[+idx];
+  const when = i.send_at ? t("定时：{time}", { time: i.send_at.replace("T", " ") })
+    : i.kind === "calendar" ? t("日程日期：{date}（全天）", { date: i.date }) : t("立即发送");
   $("#previewSubject").textContent = i.subject;
-  $("#previewTo").textContent = `收件人：${i.to.join("; ") || "（未填写）"}${i.cc.length ? `　抄送：${i.cc.join("; ")}` : ""}　${i.send_at ? `定时：${i.send_at.replace("T", " ")}` : i.kind === "calendar" ? `日程日期：${i.date}（全天）` : "立即发送"}`;
+  $("#previewTo").textContent = `${t("收件人：")}${i.to.join("; ") || t("（未填写）")}${i.cc.length ? `　${t("抄送：")}${i.cc.join("; ")}` : ""}　${when}`;
   const isEmail = i.kind === "email";
   $("#previewFrame").hidden = !isEmail;
   $("#previewText").hidden = isEmail;
@@ -317,11 +373,14 @@ $("#selectNone").addEventListener("click", () => { state.plan.forEach((i) => { i
 $("#sendBtn").addEventListener("click", async () => {
   const chosen = state.plan.map((i, idx) => ({ ...i, idx })).filter((i) => i.selected);
   if (!chosen.length) return;
-  const mailerName = $("#mailerBadge").textContent;
   const n = (f) => chosen.filter(f).length;
-  if (!confirm(`确定通过【${mailerName}】发出以下内容吗？\n立即邮件 ${n((i) => i.kind === "email" && i.action === "now")} 封\n定时邮件 ${n((i) => i.action === "defer")} 封\n日历邀请 ${n((i) => i.kind === "calendar")} 个`)) return;
+  const question = t("确定通过【{mailer}】发出以下内容吗？\n立即邮件 {now} 封\n定时邮件 {defer} 封\n日历邀请 {cal} 个", {
+    mailer: $("#mailerBadge").textContent, now: n((i) => i.kind === "email" && i.action === "now"),
+    defer: n((i) => i.action === "defer"), cal: n((i) => i.kind === "calendar"),
+  });
+  if (!confirm(question)) return;
   $("#sendBtn").disabled = true;
-  $("#sendBtn").textContent = "发送中…";
+  $("#sendBtn").textContent = t("发送中…");
   try {
     const { results } = await api("/api/send", { items: chosen });
     results.forEach((r, k) => {
@@ -331,7 +390,7 @@ $("#sendBtn").addEventListener("click", async () => {
     });
     renderPlan();
     const ok = results.filter((r) => r.status === "ok" || r.status === "dryrun").length;
-    alert(`完成：成功 ${ok} / ${results.length}${ok < results.length ? "\n失败或未发送的项目请查看“结果”列" : ""}`);
+    alert(t("完成：成功 {ok} / {n}", { ok, n: results.length }) + (ok < results.length ? `\n${t("失败或未发送的项目请查看“结果”列")}` : ""));
   } catch (e) {
     alert(e.message);
     updateSendBtn();
@@ -339,20 +398,28 @@ $("#sendBtn").addEventListener("click", async () => {
 });
 
 /* ---------- 记录 ---------- */
+const STATUS_TEXT = { ok: "成功", dryrun: "模拟", skipped: "未发送", failed: "失败" };
+
 async function loadLog() {
   const { log } = await api("/api/log");
-  const statusText = { ok: "成功", dryrun: "模拟", skipped: "未发送", failed: "失败" };
-  $("#logTable").innerHTML = log.length ? `<table class="data"><thead><tr><th>时间</th><th>合同号</th><th>客户</th><th>过保时间</th><th>内容</th><th>方式</th><th>定时</th><th>收件人</th><th>发信</th><th>状态</th><th>错误</th></tr></thead><tbody>
-    ${log.map((r) => `<tr><td>${esc(r.time)}</td><td>${esc(r.contract_no)}</td><td>${esc(r.customer)}</td><td>${esc(r.expiry)}</td>
-      <td>${esc(KIND_TEXT[r.kind] || r.kind)} <span class="muted small">${esc(r.node)}</span></td><td>${esc(ACTION_TEXT[r.action] || r.action)}</td><td>${esc(r.send_at)}</td>
+  $("#logTable").innerHTML = log.length ? `<table class="data"><thead><tr>${th("时间", "合同号", "客户", "过保时间", "内容", "方式", "定时", "收件人", "发信", "状态", "错误")}</tr></thead><tbody>
+    ${log.map((r) => `<tr><td class="nowrap">${esc(r.time)}</td><td class="small">${esc(r.contract_no).replaceAll(";", "<br>")}</td><td>${esc(r.customer)}</td><td class="nowrap">${esc(r.expiry)}</td>
+      <td>${esc(KIND_TEXT[r.kind] ? t(KIND_TEXT[r.kind]) : r.kind)} <span class="muted small">${esc(r.node)}</span></td><td>${esc(ACTION_TEXT[r.action] ? t(ACTION_TEXT[r.action]) : r.action)}</td><td>${esc(r.send_at)}</td>
       <td class="small">${esc(r.to)}</td><td>${esc(r.mailer)}</td>
-      <td class="${r.status === "failed" ? "err" : ""}">${esc(statusText[r.status] || r.status)}</td><td class="small err">${esc(r.error)}</td></tr>`).join("")}
-    </tbody></table>` : `<p class="empty">暂无记录</p>`;
+      <td class="${r.status === "failed" ? "err" : ""}">${esc(STATUS_TEXT[r.status] ? t(STATUS_TEXT[r.status]) : r.status)}</td><td class="small err">${esc(r.error)}</td></tr>`).join("")}
+    </tbody></table>` : `<p class="empty">${esc(t("暂无记录"))}</p>`;
 }
 $("#reloadLog").addEventListener("click", loadLog);
 
 /* ---------- 设置 ---------- */
 const MAILER_NAME = { outlook: "Outlook", smtp: "SMTP", dryrun: "模拟发送" };
+
+function updateMailerBadge() {
+  const m = state.settings?.mailer;
+  if (!m) return;
+  $("#mailerBadge").textContent = t(MAILER_NAME[m] || m);
+  $("#mailerBadge").className = `badge ${m === "dryrun" ? "badge-dry" : ""}`;
+}
 
 function fillSettings(s) {
   state.settings = s;
@@ -362,9 +429,8 @@ function fillSettings(s) {
     const v = b ? s[a][b] : s[a];
     if (el.type === "checkbox") el.checked = !!v; else el.value = v ?? "";
   }
-  $("#mailerBadge").textContent = MAILER_NAME[s.mailer] || s.mailer;
-  $("#mailerBadge").className = `badge ${s.mailer === "dryrun" ? "badge-dry" : ""}`;
-  $("#sendHourText").textContent = s.send_hour;
+  updateMailerBadge();
+  updatePlanHint();
 }
 
 $("#settingsForm").addEventListener("submit", async (e) => {
@@ -378,14 +444,33 @@ $("#settingsForm").addEventListener("submit", async (e) => {
   }
   try {
     fillSettings(await api("/api/settings", values));
-    $("#settingsStatus").textContent = "已保存";
+    $("#settingsStatus").textContent = t("已保存");
     state.plan = [];
-    $("#planTable").innerHTML = `<p class="empty">设置已更改，请重新生成提醒计划</p>`;
+    $("#planTable").innerHTML = `<p class="empty">${esc(t("设置已更改，请重新生成提醒计划"))}</p>`;
+    $("#planSummary").textContent = "";
     updateSendBtn();
   } catch (err) { $("#settingsStatus").textContent = err.message; }
 });
 
+/* ---------- 界面语言 ---------- */
+function applyLanguage(lang) {
+  setLang(lang);
+  $("#langToggle").textContent = LANG === "en" ? "中文" : "English";
+  updateModeUi();
+  updatePlanHint();
+  updateMailerBadge();
+  updateSendBtn();
+  renderRawResult();
+  renderReport();
+  renderFillResult();
+  renderFillTable();
+  renderPlan();
+  if ($("#tab-log").classList.contains("active")) loadLog();
+}
+$("#langToggle").addEventListener("click", () => applyLanguage(LANG === "en" ? "zh" : "en"));
+
 (async function init() {
+  applyLanguage(savedLang());
   try {
     const [settings, defaults] = await Promise.all([api("/api/settings"), api("/api/defaults")]);
     fillSettings(settings);
@@ -396,5 +481,5 @@ $("#settingsForm").addEventListener("submit", async (e) => {
     $("#optNoExpand").checked = defaults.raw.include_no_expand;
     $("#optDc").checked = defaults.raw.include_dc_energy;
     document.querySelectorAll("[data-opt]").forEach((c) => { c.checked = !!defaults.plan[c.dataset.opt]; });
-  } catch (e) { alert(`无法连接服务：${e.message}`); }
+  } catch (e) { alert(t("无法连接服务：{msg}", { msg: e.message })); }
 })();

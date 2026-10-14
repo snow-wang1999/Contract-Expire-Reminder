@@ -8,46 +8,48 @@
 </head>
 <body>
 <header class="topbar">
-  <h1>过保提醒服务</h1>
+  <h1 data-i18n>过保提醒服务</h1>
   <span id="mailerBadge" class="badge"></span>
+  <span class="spacer"></span>
+  <button id="langToggle" class="secondary" title="切换界面语言 / Switch language">English</button>
 </header>
 
 <nav class="tabs" id="tabs">
-  <button data-tab="import" class="active">① 导入原始数据</button>
-  <button data-tab="report">② 分析报告</button>
-  <button data-tab="fill">③ 上传收件人名单</button>
-  <button data-tab="send">④ 提醒计划与发送</button>
-  <button data-tab="log">发送记录</button>
-  <button data-tab="settings">设置</button>
+  <button data-tab="import" class="active" data-i18n>① 导入原始数据</button>
+  <button data-tab="report" data-i18n>② 分析报告</button>
+  <button data-tab="fill" data-i18n>③ 上传收件人名单</button>
+  <button data-tab="send" data-i18n>④ 提醒计划与发送</button>
+  <button data-tab="log" data-i18n>发送记录</button>
+  <button data-tab="settings" data-i18n>设置</button>
 </nav>
 
 <main>
   <!-- ① 导入原始数据 -->
   <section id="tab-import" class="tab active">
     <div class="card form">
-      <h2>通知模式</h2>
+      <h2 data-i18n>通知模式</h2>
       <div class="options">
-        <label class="check"><input type="radio" name="mode" value="customer" checked> 客户通知（发给负责该客户的同事，默认中文）</label>
-        <label class="check"><input type="radio" name="mode" value="channel"> 渠道续保通知（发给签约客户 / 二代，默认英文）</label>
+        <label class="check"><input type="radio" name="mode" value="customer" checked> <span data-i18n>客户通知（发给负责该客户的同事，默认中文）</span></label>
+        <label class="check"><input type="radio" name="mode" value="channel"> <span data-i18n>渠道续保通知（发给签约客户 / 二代，默认英文）</span></label>
       </div>
-      <label class="check" id="channelOpt"><input type="checkbox" id="optNonKey" checked> 只包含非卓越 / 战略 / 核心客户（卓战核客户走客户通知）</label>
+      <label class="check" id="channelOpt"><input type="checkbox" id="optNonKey" checked> <span data-i18n>只包含非卓越 / 战略 / 核心客户（卓战核客户走客户通知）</span></label>
       <p class="muted small" id="modeHint"></p>
-      <h2>筛选参数</h2>
+      <h2 data-i18n>筛选参数</h2>
       <div class="grid">
-        <label>过保时间从<input type="date" id="optStart"></label>
-        <label>到<input type="date" id="optEnd"></label>
-        <label>合同合计目录价大于（美元）<input type="number" id="optMin" min="0" step="1000"></label>
+        <label><span data-i18n>过保时间从</span><input type="date" id="optStart"></label>
+        <label><span data-i18n>到</span><input type="date" id="optEnd"></label>
+        <label><span data-i18n>合同合计目录价大于（美元）</span><input type="number" id="optMin" min="0" step="1000"></label>
       </div>
-      <label class="check"><input type="checkbox" id="optEos"> 包含已 EOS 设备（EOS 时间不晚于过保时间）</label>
-      <label class="check"><input type="checkbox" id="optNoExpand"> 包含资产状态为“不再拓展”的设备</label>
-      <label class="check"><input type="checkbox" id="optDc"> 包含产品线“数据中心能源及关键供电”</label>
+      <label class="check"><input type="checkbox" id="optEos"> <span data-i18n>包含已 EOS 设备（EOS 时间不晚于过保时间）</span></label>
+      <label class="check"><input type="checkbox" id="optNoExpand"> <span data-i18n>包含资产状态为“不再拓展”的设备</span></label>
+      <label class="check"><input type="checkbox" id="optDc"> <span data-i18n>包含产品线“数据中心能源及关键供电”</span></label>
     </div>
     <div class="card">
-      <h2>拖入系统导出的原始续保数据</h2>
+      <h2 data-i18n>拖入系统导出的原始续保数据</h2>
       <label class="drop" id="rawDrop">
         <input type="file" id="rawInput" accept=".xlsx,.xlsm,.csv" hidden>
-        <strong>点击选择或拖入 Excel 文件</strong>
-        <span class="muted">续保单明细导出表（含“当前合同号”“服务结束”“目录价”等列）</span>
+        <strong data-i18n>点击选择或拖入 Excel 文件</strong>
+        <span class="muted" data-i18n>续保单明细导出表（含“当前合同号”“服务结束”“目录价”等列）</span>
       </label>
       <div id="rawResult"></div>
     </div>
@@ -58,37 +60,38 @@
     <div class="toolbar">
       <span class="muted" id="reportMeta"></span>
       <span class="spacer"></span>
-      <button id="exportReport" class="secondary">导出报告 (HTML)</button>
-      <button id="downloadTemplate">下载待填写名单 (Excel)</button>
+      <button id="exportReport" class="secondary" data-i18n>导出报告 (HTML)</button>
+      <button id="downloadTemplate" data-i18n>下载待填写名单 (Excel)</button>
     </div>
-    <div id="report"><p class="empty">请先导入数据</p></div>
+    <div id="report"><p class="empty" data-i18n>请先导入数据</p></div>
   </section>
 
   <!-- ③ 上传收件人名单 -->
   <section id="tab-fill" class="tab">
     <div class="card">
-      <h2>怎么填写</h2>
+      <h2 data-i18n>怎么填写</h2>
       <ol class="steps">
-        <li>在第②步点击“下载待填写名单”，打开 Excel 的【提醒名单】工作表。</li>
-        <li>只填写黄色的 <b>邮箱名单</b> 列，其他列不要改。一行就是一条提醒（合同号 + 过保时间 + 维保类型）。</li>
-        <li>多个收件人用英文分号 <code>;</code> 分隔，可以填邮箱，也可以填 Outlook 能识别的“姓名 工号”。</li>
-        <li><b>邮件语言</b> 列默认“中文”，需要发英文版（邮件和日历邀请）的行下拉选择 <b>English</b>。</li>
-        <li>留空的行不会发送；不需要提醒的行可以整行删除。保存后在下面上传。</li>
+        <li data-i18n-html>在第②步点击“下载待填写名单”，打开 Excel 的【提醒名单】工作表。Excel 的列名请保持中文，程序按列名识别。</li>
+        <li data-i18n-html>只填写黄色的 <b>邮箱名单</b> 和 <b>邮件语言</b> 两列，其他列不要改。一行就是一条提醒（合同号 + 过保时间 + 维保类型）。</li>
+        <li data-i18n-html>同一客户（渠道模式为同一签约客户 / 二代）的行排在一起、底色相同，收件人通常一样，可以整组复制。</li>
+        <li data-i18n-html>多个收件人用英文分号 <code>;</code> 分隔，可以填邮箱，也可以填 Outlook 能识别的“姓名 工号”。</li>
+        <li data-i18n-html><b>邮件语言</b> 客户通知默认“中文”、渠道通知默认“English”，可下拉切换。</li>
+        <li data-i18n-html>留空的行不会发送；不需要提醒的行可以整行删除。保存后在下面上传。</li>
       </ol>
       <table class="data example">
-        <thead><tr><th>代表处</th><th>最终客户</th><th>合同名称</th><th>过保时间</th><th>维保类型</th><th>合同号</th><th class="num">金额</th><th class="fillme">邮箱名单（填这一列）</th><th class="fillme">邮件语言</th></tr></thead>
+        <thead><tr><th>代表处</th><th>客户分类</th><th>最终客户</th><th>合同名称</th><th>过保时间</th><th>维保类型</th><th>合同号</th><th class="num">金额</th><th class="fillme">邮箱名单</th><th class="fillme">邮件语言</th></tr></thead>
         <tbody>
-          <tr><td>南非代表处</td><td>City of Tshwane</td><td>PIN CL SA COT_Brilliantel_Services</td><td>2027-03-31</td><td>Hi-Care</td><td>0Y071024000326</td><td class="num">46,000</td><td class="fillme">zhangsan@huawei.com;lisi@huawei.com</td><td class="fillme">中文</td></tr>
-          <tr><td>尼日利亚代表处</td><td>Access Bank Plc</td><td>Nigeria_Service Renewal</td><td>2027-06-30</td><td>Warranty</td><td>0Y056625000932</td><td class="num">38,000</td><td class="fillme">wangwu 00123456;zhaoliu@huawei.com</td><td class="fillme">English</td></tr>
+          <tr><td>南非代表处</td><td>Strategic Account</td><td>City of Tshwane</td><td>PIN CL SA COT_Brilliantel_Services</td><td>2027-03-31</td><td>Hi-Care</td><td>0Y071024000326</td><td class="num">46,000</td><td class="fillme">zhangsan@huawei.com;lisi@huawei.com</td><td class="fillme">中文</td></tr>
+          <tr><td>尼日利亚代表处</td><td>Strategic Account</td><td>Access Bank Plc</td><td>Nigeria_Service Renewal</td><td>2027-06-30</td><td>Warranty</td><td>0Y056625000932</td><td class="num">38,000</td><td class="fillme">wangwu 00123456;zhaoliu@huawei.com</td><td class="fillme">English</td></tr>
         </tbody>
       </table>
-      <p class="muted small">以上为示例。系统会记住每个客户填写过的邮箱，下次下载名单时自动带出。旧版“维保日历数据.xlsx”格式也可以直接上传。</p>
+      <p class="muted small" data-i18n>以上为示例（Excel 表头为中文）。系统会记住填写过的邮箱和语言，下次下载名单时自动带出。旧版“维保日历数据.xlsx”格式也可以直接上传。</p>
     </div>
     <div class="card">
-      <h2>上传已填写的名单</h2>
+      <h2 data-i18n>上传已填写的名单</h2>
       <label class="drop" id="fillDrop">
         <input type="file" id="fillInput" accept=".xlsx,.xlsm,.csv" hidden>
-        <strong>点击选择或拖入已填写的 Excel 文件</strong>
+        <strong data-i18n>点击选择或拖入已填写的 Excel 文件</strong>
       </label>
       <div id="fillResult"></div>
       <div id="fillTable"></div>
@@ -98,91 +101,93 @@
   <!-- ④ 计划与发送 -->
   <section id="tab-send" class="tab">
     <div class="card form">
-      <h2>提醒频率（可任意组合）</h2>
+      <h2 data-i18n>提醒频率（可任意组合）</h2>
       <div class="options">
-        <label class="check"><input type="checkbox" data-opt="m6"> 过保前 6 个月</label>
-        <label class="check"><input type="checkbox" data-opt="m3"> 过保前 3 个月</label>
-        <label class="check"><input type="checkbox" data-opt="m1"> 过保前 1 个月</label>
-        <label class="check"><input type="checkbox" data-opt="immediate"> 立即发送一次</label>
-        <label class="check"><input type="checkbox" data-opt="expiry_calendar"> 过保当日写入 Outlook 日历并邀请收件人</label>
+        <label class="check"><input type="checkbox" data-opt="m6"> <span data-i18n>过保前 6 个月</span></label>
+        <label class="check"><input type="checkbox" data-opt="m3"> <span data-i18n>过保前 3 个月</span></label>
+        <label class="check"><input type="checkbox" data-opt="m1"> <span data-i18n>过保前 1 个月</span></label>
+        <label class="check"><input type="checkbox" data-opt="immediate"> <span data-i18n>立即发送一次</span></label>
+        <label class="check"><input type="checkbox" data-opt="expiry_calendar"> <span data-i18n>过保当日写入 Outlook 日历并邀请收件人</span></label>
       </div>
       <div class="options">
-        <span>已经过去的提醒节点：</span>
-        <label class="check"><input type="radio" name="pastNodes" value="skip" checked> 跳过</label>
-        <label class="check"><input type="radio" name="pastNodes" value="send_now"> 立即补发（多个节点合并为一封）</label>
+        <span data-i18n>已经过去的提醒节点：</span>
+        <label class="check"><input type="radio" name="pastNodes" value="skip" checked> <span data-i18n>跳过</span></label>
+        <label class="check"><input type="radio" name="pastNodes" value="send_now"> <span data-i18n>立即补发（多个节点合并为一封）</span></label>
       </div>
-      <p class="muted small">定时邮件在节点当天 <span id="sendHourText"></span> 点由 Outlook 发出（需开启 Outlook 或使用 Exchange 账号）。已发送/已排定过的节点会自动跳过，可放心重复运行。</p>
-      <div class="toolbar"><button id="buildPlan">生成提醒计划</button></div>
+      <p class="muted small" id="planHint"></p>
+      <div class="toolbar"><button id="buildPlan" data-i18n>生成提醒计划</button></div>
     </div>
     <div class="toolbar">
       <span id="planSummary" class="muted"></span>
       <span class="spacer"></span>
-      <label class="check"><input type="checkbox" id="hideSkipped" checked> 隐藏跳过项</label>
-      <button id="selectAll" class="secondary">全选可发送</button>
-      <button id="selectNone" class="secondary">全不选</button>
-      <button id="sendBtn" disabled>发送选中</button>
+      <label class="check"><input type="checkbox" id="hideSkipped" checked> <span data-i18n>隐藏跳过项</span></label>
+      <button id="selectAll" class="secondary" data-i18n>全选可发送</button>
+      <button id="selectNone" class="secondary" data-i18n>全不选</button>
+      <button id="sendBtn" disabled></button>
     </div>
-    <div id="planTable"><p class="empty">请先上传收件人名单，再生成提醒计划</p></div>
+    <div id="planTable"><p class="empty" data-i18n>请先上传收件人名单，再生成提醒计划</p></div>
   </section>
 
   <!-- 记录 -->
   <section id="tab-log" class="tab">
-    <div class="toolbar"><span class="muted">最近 500 条记录（完整记录见 data/send_log.csv）</span>
-      <span class="spacer"></span><button id="reloadLog" class="secondary">刷新</button></div>
+    <div class="toolbar"><span class="muted" data-i18n>最近 500 条记录（完整记录见 data/send_log.csv）</span>
+      <span class="spacer"></span><button id="reloadLog" class="secondary" data-i18n>刷新</button></div>
     <div id="logTable"></div>
   </section>
 
   <!-- 设置 -->
   <section id="tab-settings" class="tab">
     <form id="settingsForm" class="card form">
-      <h2>发送设置</h2>
-      <label>发信方式
+      <h2 data-i18n>发送设置</h2>
+      <label><span data-i18n>发信方式</span>
         <select name="mailer">
-          <option value="outlook">Outlook 客户端（Windows，支持定时发送和日历邀请）</option>
-          <option value="smtp">SMTP 服务器（不支持定时和日历）</option>
-          <option value="dryrun">模拟发送（只记录，不真正发信）</option>
+          <option value="outlook" data-i18n>Outlook 客户端（Windows，支持定时发送和日历邀请）</option>
+          <option value="smtp" data-i18n>SMTP 服务器（不支持定时和日历）</option>
+          <option value="dryrun" data-i18n>模拟发送（只记录，不真正发信）</option>
         </select>
       </label>
       <div class="grid">
-        <label>定时邮件发送时刻（点）<input type="number" name="send_hour" min="0" max="23"></label>
-        <label>统一抄送（可选，多个用 ; 分隔）<input type="text" name="cc"></label>
+        <label><span data-i18n>定时邮件发送时刻（点）</span><input type="number" name="send_hour" min="0" max="23"></label>
+        <label><span data-i18n>统一抄送（可选，多个用 ; 分隔）</span><input type="text" name="cc"></label>
       </div>
 
-      <h2>模板</h2>
-      <p class="muted">可用占位符：{office} {customer} {contract_name} {expiry} {service_type} {contract_no} {amount} {amount_fmt} {products} {node_label} {days_left} {days_text}。清空后保存即恢复默认模板。</p>
-      <details open><summary><b>中文版</b></summary>
-        <label>邮件标题<input type="text" name="subject_template"></label>
-        <label>日历邀请标题<input type="text" name="calendar_subject_template"></label>
-        <label>邮件正文（HTML）<textarea name="body_template" rows="12"></textarea></label>
+      <h2 data-i18n>模板</h2>
+      <p class="muted" data-i18n>可用占位符：{office} {customer} {contract_name} {expiry} {service_type} {contract_no} {amount} {amount_fmt} {products} {node_label} {days_left} {days_text}。清空后保存即恢复默认模板。</p>
+      <details open><summary><b data-i18n>客户通知 · 中文版</b></summary>
+        <label><span data-i18n>邮件标题</span><input type="text" name="subject_template"></label>
+        <label><span data-i18n>日历邀请标题</span><input type="text" name="calendar_subject_template"></label>
+        <label><span data-i18n>邮件正文（HTML）</span><textarea name="body_template" rows="12"></textarea></label>
       </details>
-      <details><summary><b>英文版（English）</b></summary>
-        <label>邮件标题<input type="text" name="subject_template_en"></label>
-        <label>日历邀请标题<input type="text" name="calendar_subject_template_en"></label>
-        <label>邮件正文（HTML）<textarea name="body_template_en" rows="12"></textarea></label>
+      <details><summary><b data-i18n>客户通知 · 英文版</b></summary>
+        <label><span data-i18n>邮件标题</span><input type="text" name="subject_template_en"></label>
+        <label><span data-i18n>日历邀请标题</span><input type="text" name="calendar_subject_template_en"></label>
+        <label><span data-i18n>邮件正文（HTML）</span><textarea name="body_template_en" rows="12"></textarea></label>
       </details>
-      <details><summary><b>渠道续保通知 · 英文版（默认）</b></summary>
-        <p class="muted small">发给签约客户 / 二代，默认不含金额和内部联系人、内部链接。额外占位符：{partner_name}（二代，没有时为签约客户）{signer} {tier2} {customer_class}</p>
-        <label>邮件标题<input type="text" name="subject_template_channel_en"></label>
-        <label>邮件正文（HTML）<textarea name="body_template_channel_en" rows="12"></textarea></label>
+      <details><summary><b data-i18n>渠道续保通知 · 英文版（默认）</b></summary>
+        <p class="muted small" data-i18n>按合作伙伴合并成一封，发给签约客户 / 二代，不含金额和内部联系人、内部链接。额外占位符：{partner_name}（二代，没有时为签约客户）{count}（合同数）{first_expiry}（最早过保日）{contracts_table}（合同列表）{signer} {tier2}</p>
+        <label><span data-i18n>邮件标题</span><input type="text" name="subject_template_partner_en"></label>
+        <label><span data-i18n>日历邀请标题</span><input type="text" name="calendar_subject_template_partner_en"></label>
+        <label><span data-i18n>邮件正文（HTML）</span><textarea name="body_template_partner_en" rows="12"></textarea></label>
       </details>
-      <details><summary><b>渠道续保通知 · 中文版</b></summary>
-        <label>邮件标题<input type="text" name="subject_template_channel"></label>
-        <label>邮件正文（HTML）<textarea name="body_template_channel" rows="12"></textarea></label>
+      <details><summary><b data-i18n>渠道续保通知 · 中文版</b></summary>
+        <label><span data-i18n>邮件标题</span><input type="text" name="subject_template_partner"></label>
+        <label><span data-i18n>日历邀请标题</span><input type="text" name="calendar_subject_template_partner"></label>
+        <label><span data-i18n>邮件正文（HTML）</span><textarea name="body_template_partner" rows="12"></textarea></label>
       </details>
 
       <fieldset>
-        <legend>SMTP（仅在发信方式为 SMTP 时使用）</legend>
+        <legend data-i18n>SMTP（仅在发信方式为 SMTP 时使用）</legend>
         <div class="grid">
-          <label>服务器<input type="text" name="smtp.host"></label>
-          <label>端口<input type="number" name="smtp.port"></label>
-          <label>用户名<input type="text" name="smtp.username"></label>
-          <label>密码<input type="password" name="smtp.password"></label>
-          <label>发件人地址<input type="text" name="smtp.sender"></label>
+          <label><span data-i18n>服务器</span><input type="text" name="smtp.host"></label>
+          <label><span data-i18n>端口</span><input type="number" name="smtp.port"></label>
+          <label><span data-i18n>用户名</span><input type="text" name="smtp.username"></label>
+          <label><span data-i18n>密码</span><input type="password" name="smtp.password"></label>
+          <label><span data-i18n>发件人地址</span><input type="text" name="smtp.sender"></label>
         </div>
         <label class="check"><input type="checkbox" name="smtp.ssl"> SSL</label>
         <label class="check"><input type="checkbox" name="smtp.starttls"> STARTTLS</label>
       </fieldset>
-      <div class="toolbar"><span id="settingsStatus" class="muted"></span><span class="spacer"></span><button type="submit">保存设置</button></div>
+      <div class="toolbar"><span id="settingsStatus" class="muted"></span><span class="spacer"></span><button type="submit" data-i18n>保存设置</button></div>
     </form>
   </section>
 </main>
@@ -190,11 +195,12 @@
 <dialog id="previewDialog">
   <h3 id="previewSubject"></h3>
   <p class="muted" id="previewTo"></p>
-  <iframe id="previewFrame" sandbox title="邮件预览"></iframe>
+  <iframe id="previewFrame" sandbox title="preview"></iframe>
   <pre id="previewText"></pre>
-  <form method="dialog"><button>关闭</button></form>
+  <form method="dialog"><button data-i18n>关闭</button></form>
 </dialog>
 
+<script src="/static/i18n.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

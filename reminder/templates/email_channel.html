@@ -27,7 +27,7 @@
         <tr>
           <td style="padding:24px 24px 12px 24px;">
             <div style="font-size:20px;font-weight:bold;color:#000;">
-              ⏰ 维保到期通知 | {expiry}
+              ⏰ 维保到期通知 | {node_label}
             </div>
           </td>
         </tr>
@@ -36,46 +36,17 @@
         <tr>
           <td style="padding:0 24px 12px 24px;font-size:14px;color:#333;line-height:1.6;">
             尊敬的{partner_name}：<br>
-            您的客户 <strong>{customer}</strong> 的以下华为维保服务即将到期，请及时联系客户确认续保，避免服务中断。
+            您的客户有以下 {count} 个华为维保服务合同即将到期，请及时联系客户确认续保，避免服务中断。
           </td>
         </tr>
 
-        <!-- 基本信息 -->
+        <!-- 合同列表 -->
         <tr>
           <td style="padding:0 24px 20px 24px;">
-            <table width="100%" cellpadding="6" cellspacing="0"
-                   style="font-size:14px;color:#333;">
-              <tr>
-                <td width="120">代表处</td>
-                <td>{office}</td>
-              </tr>
-              <tr>
-                <td>最终客户</td>
-                <td><strong>{customer}</strong></td>
-              </tr>
-              <tr>
-                <td>合同名称</td>
-                <td>{contract_name}</td>
-              </tr>
-              <tr>
-                <td>维保类型</td>
-                <td>{service_type}</td>
-              </tr>
-              <tr>
-                <td>合同编号</td>
-                <td>{contract_no}</td>
-              </tr>
-              <tr>
-                <td style="vertical-align:top;">产品型号</td>
-                <td>{products}</td>
-              </tr>
-              <tr>
-                <td>提醒节点</td>
-                <td>{node_label}（{days_text}）</td>
-              </tr>
-            </table>
+            {contracts_table}
           </td>
         </tr>
+
 
         <!-- 关键时间节点 -->
         <tr>

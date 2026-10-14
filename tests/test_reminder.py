@@ -294,6 +294,61 @@ def test_channel_mode_filters_key_accounts_and_groups_by_signer():
     assert first["tier2"] == "Reseller A" and first["emails"] == ["p@dist.com"]
 
     item = by_node(planner.plan([first], SETTINGS, set(), None, NOW))[("email", "m3")]
-    assert item["subject"] == "Y | Huawei Maintenance Renewal Notice | Expiry 2027-03-01"
+    assert item["subject"] == "Huawei Maintenance Renewal Notice | Reseller A | 1 contract(s), earliest expiry 2027-03-01"
     assert "Dear Reseller A," in item["body"] and "$5.0W" not in item["body"] and "00621410" not in item["body"]
     assert item["keys"] == ["A2|2027-03-01|Hi-Care|channel|m3"]
+    assert item["send_at"] == "2026-12-01T09:00"   # 渠道节点提前到当月 1 日
+
+
+def test_channel_digest_merges_contracts_per_partner():
+    def rec(i, no, expiry, emails, tier2="Reseller A", customer="Cust"):
+        return {"id": i, "contract_no": no, "expiry": expiry, "service_type": "Hi-Care", "customer": f"{customer}{i}",
+                "contract_name": f"N{i}", "office": "南非代表处", "amount": 30000.0, "emails": emails, "lang": "en",
+                "mode": "channel", "signer": "Big Dist", "tier2": tier2, "product_lines": [f"P{i}×1"]}
+    records = [rec(0, "A", "2027-03-01", ["p@d.com"]), rec(1, "B", "2027-03-31", ["P@d.com"]),
+               rec(2, "C", "2027-06-15", ["p@d.com"]), rec(3, "D", "2027-03-10", ["other@d.com"]),
+               rec(4, "E", "2027-03-05", ["p@d.com"], tier2="Reseller B")]
+    opts = {"m6": False, "m3": True, "m1": False, "immediate": True, "expiry_calendar": True}
+    items = planner.plan(records, SETTINGS, {"B|2027-03-31|Hi-Care|channel|immediate|2026-10-14"}, opts, NOW)
+    m3 = [i for i in items if i["node"] == "m3" and i["action"] == "defer"]
+    # 收件人相同（忽略大小写）即合并：E 虽是另一个二代，但收件人相同
+    assert sorted((i["send_at"], tuple(i["contract_nos"])) for i in m3) == [
+        ("2026-12-01T09:00", ("A", "B", "E")), ("2026-12-01T09:00", ("D",)), ("2027-03-01T09:00", ("C",))]
+    ab = next(i for i in m3 if i["contract_nos"] == ["A", "B", "E"])
+    assert ab["count"] == 3 and "The following 3 Huawei" in ab["body"] and "Cust0" in ab["body"] and "Cust4" in ab["body"]
+    assert "Dear Big Dist," in ab["body"]          # 二代不同，称呼签约客户
+    assert ab["keys"] == ["A|2027-03-01|Hi-Care|channel|m3", "B|2027-03-31|Hi-Care|channel|m3",
+                          "E|2027-03-05|Hi-Care|channel|m3"]
+    now = [i for i in items if i["action"] == "now" and i["kind"] == "email" and not i["already_sent"]]
+    assert sorted(tuple(i["contract_nos"]) for i in now) == [("A", "C", "E"), ("D",)]   # B 今天已立即发过
+    assert next(i for i in items if i["contract_nos"] == ["B"] and i["node"] == "now")["already_sent"]
+    cal = [i for i in items if i["kind"] == "calendar"]
+    assert len(cal) == 5 and all(i["count"] == 1 for i in cal)   # 过保日期都不同
+    assert cal[0]["subject"].startswith("[Maintenance Expiry] Reseller A")
+    assert planner.partner_name([{"signer": "S", "tier2": ""}], "en") == "S"
+    assert planner.partner_name([{"signer": "S", "tier2": "A"}, {"signer": "T", "tier2": "B"}], "zh") == "合作伙伴"
+
+
+def test_email_templates_are_well_formed():
+    from html.parser import HTMLParser
+
+    class Checker(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.stack, self.errors = [], []
+
+        def handle_starttag(self, tag, attrs):
+            if tag not in ("br", "meta"):
+                self.stack.append(tag)
+
+        def handle_endtag(self, tag):
+            if self.stack and self.stack[-1] == tag:
+                self.stack.pop()
+            else:
+                self.errors.append((tag, self.getpos()))
+
+    for key in ("body_template", "body_template_en", "body_template_partner", "body_template_partner_en"):
+        c = Checker()
+        c.feed(store.DEFAULT_SETTINGS[key])
+        assert not c.errors and not c.stack, (key, c.errors, c.stack)
+        assert "\nr>" not in store.DEFAULT_SETTINGS[key]

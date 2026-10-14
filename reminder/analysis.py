@@ -44,7 +44,7 @@ def _by_class(records):
     rows = []
     for g in _group(records, "customer_class"):
         raw = "" if g["name"] == "（未填写）" else g["name"]
-        rows.append({**g, "rank": class_rank(raw), "name": class_label(raw) + (f" · {raw}" if raw else "")})
+        rows.append({**g, "raw": raw, "rank": class_rank(raw), "name": class_label(raw) + (f" · {raw}" if raw else "")})
     return sorted(rows, key=lambda g: g["rank"])
 
 

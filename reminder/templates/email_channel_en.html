@@ -27,7 +27,7 @@
         <tr>
           <td style="padding:24px 24px 12px 24px;">
             <div style="font-size:20px;font-weight:bold;color:#000;">
-              ⏰ Maintenance Expiry Notice | {expiry}
+              ⏰ Maintenance Expiry Notice | {node_label}
             </div>
           </td>
         </tr>
@@ -36,47 +36,18 @@
         <tr>
           <td style="padding:0 24px 12px 24px;font-size:14px;color:#333;line-height:1.6;">
             Dear {partner_name},<br>
-            The Huawei maintenance service below for your customer <strong>{customer}</strong> is approaching its expiry date.
-            Please contact the customer to confirm the renewal in time to avoid any service gap.
+            The following {count} Huawei maintenance service contract(s) for your customers are approaching their expiry dates.
+            Please contact the customers to confirm the renewal in time to avoid any service gap.
           </td>
         </tr>
 
-        <!-- Basic info -->
+        <!-- Contracts -->
         <tr>
           <td style="padding:0 24px 20px 24px;">
-            <table width="100%" cellpadding="6" cellspacing="0"
-                   style="font-size:14px;color:#333;">
-              <tr>
-                <td width="140">Rep Office</td>
-                <td>{office}</td>
-              </tr>
-              <tr>
-                <td>End Customer</td>
-                <td><strong>{customer}</strong></td>
-              </tr>
-              <tr>
-                <td>Contract Name</td>
-                <td>{contract_name}</td>
-              </tr>
-              <tr>
-                <td>Service Type</td>
-                <td>{service_type}</td>
-              </tr>
-              <tr>
-                <td>Contract No.</td>
-                <td>{contract_no}</td>
-              </tr>
-              <tr>
-                <td style="vertical-align:top;">Products</td>
-                <td>{products}</td>
-              </tr>
-              <tr>
-                <td>Reminder</td>
-                <td>{node_label} ({days_text})</td>
-              </tr>
-            </table>
+            {contracts_table}
           </td>
         </tr>
+
 
         <!-- Milestones -->
         <tr>

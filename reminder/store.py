@@ -33,11 +33,13 @@ DEFAULT_SETTINGS = {
     "subject_template_en": "{customer} | {amount_fmt} Warranty Expiry | Renewal Reminder",
     "body_template_en": DEFAULT_BODY_EN,
     "calendar_subject_template_en": "[Warranty Expiry] {customer} | {amount_fmt} | {service_type}",
-    # 渠道续保通知（发给签约客户/二代，不含内部信息和金额）
-    "subject_template_channel": "{customer} | 华为维保续保通知 | 到期日 {expiry}",
-    "body_template_channel": DEFAULT_BODY_CHANNEL,
-    "subject_template_channel_en": "{customer} | Huawei Maintenance Renewal Notice | Expiry {expiry}",
-    "body_template_channel_en": DEFAULT_BODY_CHANNEL_EN,
+    # 渠道续保通知（按合作伙伴合并成一封，列出全部合同；不含金额和内部信息）
+    "subject_template_partner": "华为维保续保通知 | {partner_name} | {count} 个合同，最早 {first_expiry} 到期",
+    "body_template_partner": DEFAULT_BODY_CHANNEL,
+    "calendar_subject_template_partner": "【维保到期】{partner_name} | {count} 个合同",
+    "subject_template_partner_en": "Huawei Maintenance Renewal Notice | {partner_name} | {count} contract(s), earliest expiry {first_expiry}",
+    "body_template_partner_en": DEFAULT_BODY_CHANNEL_EN,
+    "calendar_subject_template_partner_en": "[Maintenance Expiry] {partner_name} | {count} contract(s)",
     "smtp": {"host": "", "port": 465, "ssl": True, "starttls": False,
              "username": "", "password": "", "sender": ""},
 }
