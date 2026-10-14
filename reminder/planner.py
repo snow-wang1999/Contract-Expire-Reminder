@@ -7,8 +7,8 @@
 节点日期已过去时默认跳过；选择 past_nodes="send_now" 则立即补发。
 同一条提醒当下要发的多个节点合并成一封邮件，避免一次收到多封相同内容。
 
-渠道续保通知按收件人合并：收件人和语言相同的合同（通常是同一签约客户 / 二代），
-同一天要发的提醒合并成一封，正文用表格列出全部合同。为了让更多合同合并，
+渠道续保通知按合作伙伴合并：签约客户、二代、收件人、语言都相同的合同，
+同一天要发的提醒合并成一封，正文用表格列出全部合同。不同二代分开发（有时直接与二代签约）。为了让更多合同合并，
 渠道通知的 6/3/1 个月节点统一提前到当月 1 日（例如 2027-03-31 过保，3 个月节点为 2026-12-01）。
 过保当日日历邀请按同一过保日期合并。
 """
@@ -329,8 +329,8 @@ def _partner_group(unit):
     r = unit["record"]
     when = unit["send_at"] if unit["action"] == "defer" else (
         unit["date"].isoformat() if unit["kind"] == "calendar" else "now")
-    return (tuple(sorted(e.lower() for e in r.get("emails") or [])), r.get("lang", "zh"),
-            unit["kind"], unit["action"], when)
+    return (r.get("signer", ""), r.get("tier2", ""), tuple(sorted(e.lower() for e in r.get("emails") or [])),
+            r.get("lang", "zh"), unit["kind"], unit["action"], when)
 
 
 def plan(records, settings, sent, options=None, now=None):

@@ -311,16 +311,16 @@ def test_channel_digest_merges_contracts_per_partner():
     opts = {"m6": False, "m3": True, "m1": False, "immediate": True, "expiry_calendar": True}
     items = planner.plan(records, SETTINGS, {"B|2027-03-31|Hi-Care|channel|immediate|2026-10-14"}, opts, NOW)
     m3 = [i for i in items if i["node"] == "m3" and i["action"] == "defer"]
-    # 收件人相同（忽略大小写）即合并：E 虽是另一个二代，但收件人相同
+    # 同一签约客户 + 二代 + 收件人（忽略大小写）才合并；E 是另一个二代，即使收件人相同也分开
     assert sorted((i["send_at"], tuple(i["contract_nos"])) for i in m3) == [
-        ("2026-12-01T09:00", ("A", "B", "E")), ("2026-12-01T09:00", ("D",)), ("2027-03-01T09:00", ("C",))]
-    ab = next(i for i in m3 if i["contract_nos"] == ["A", "B", "E"])
-    assert ab["count"] == 3 and "The following 3 Huawei" in ab["body"] and "Cust0" in ab["body"] and "Cust4" in ab["body"]
-    assert "Dear Big Dist," in ab["body"]          # 二代不同，称呼签约客户
-    assert ab["keys"] == ["A|2027-03-01|Hi-Care|channel|m3", "B|2027-03-31|Hi-Care|channel|m3",
-                          "E|2027-03-05|Hi-Care|channel|m3"]
+        ("2026-12-01T09:00", ("A", "B")), ("2026-12-01T09:00", ("D",)), ("2026-12-01T09:00", ("E",)),
+        ("2027-03-01T09:00", ("C",))]
+    ab = next(i for i in m3 if i["contract_nos"] == ["A", "B"])
+    assert ab["count"] == 2 and "The following 2 Huawei" in ab["body"] and "Cust0" in ab["body"] and "Cust1" in ab["body"]
+    assert "Dear Reseller A," in ab["body"]
+    assert ab["keys"] == ["A|2027-03-01|Hi-Care|channel|m3", "B|2027-03-31|Hi-Care|channel|m3"]
     now = [i for i in items if i["action"] == "now" and i["kind"] == "email" and not i["already_sent"]]
-    assert sorted(tuple(i["contract_nos"]) for i in now) == [("A", "C", "E"), ("D",)]   # B 今天已立即发过
+    assert sorted(tuple(i["contract_nos"]) for i in now) == [("A", "C"), ("D",), ("E",)]   # B 今天已立即发过
     assert next(i for i in items if i["contract_nos"] == ["B"] and i["node"] == "now")["already_sent"]
     cal = [i for i in items if i["kind"] == "calendar"]
     assert len(cal) == 5 and all(i["count"] == 1 for i in cal)   # 过保日期都不同
