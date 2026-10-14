@@ -32,12 +32,13 @@ def _group(records, key):
             g["expired"] += 1
         elif r["days_left"] <= 180:
             g["within_180"] += 1
-        if r["days_left"] >= 0 and (g["nearest"] is None or r["expiry"] < g["nearest"]):
+        if (g["nearest"] is None or r["expiry"] < g["nearest"]):
             g["nearest"] = r["expiry"]
     return sorted(groups.values(), key=lambda g: (-g["amount"], -g["count"]))
 
 
-def analyze(records, today=None):
+def analyze(records, today=None, period=None):
+    """period: {"start": iso, "end": iso}；有时按该时间段逐月统计，否则统计未来 12 个月。"""
     today = today or dt.date.today()
     enriched = []
     for r in records:
@@ -50,10 +51,14 @@ def analyze(records, today=None):
         b["count"] += 1
         b["amount"] += r["amount"] or 0
 
-    # 未来 12 个月（含本月）逐月到期分布
+    # 逐月到期分布：提醒时间段内（最多 24 个月），默认未来 12 个月（含本月）
     months = OrderedDict()
-    y, m = today.year, today.month
-    for _ in range(12):
+    first = dt.date.fromisoformat(period["start"]) if period else today
+    last = dt.date.fromisoformat(period["end"]) if period else None
+    y, m = first.year, first.month
+    for _ in range(24 if period else 12):
+        if last and (y, m) > (last.year, last.month):
+            break
         months[f"{y:04d}-{m:02d}"] = {"name": f"{y:04d}-{m:02d}", "count": 0, "amount": 0.0}
         y, m = (y + 1, 1) if m == 12 else (y, m + 1)
     for r in enriched:
@@ -73,6 +78,7 @@ def analyze(records, today=None):
         "buckets": list(buckets.values()),
         "by_office": _group(enriched, "office"),
         "by_type": _group(enriched, "service_type"),
+        "by_customer": _group(enriched, "customer")[:10],
         "by_month": list(months.values()),
         "records": sorted(enriched, key=lambda r: r["expiry"]),
     }

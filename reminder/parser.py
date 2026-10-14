@@ -111,7 +111,7 @@ def _text(value):
     return str(value).strip()
 
 
-def _read_rows(filename, content):
+def read_rows(filename, content):
     name = filename.lower()
     if name.endswith(".csv"):
         for encoding in ("utf-8-sig", "gbk"):
@@ -133,7 +133,11 @@ def _read_rows(filename, content):
 
 def parse_file(filename, content):
     """返回 (records, warnings)。"""
-    rows = _read_rows(filename, content)
+    return parse_rows(read_rows(filename, content))
+
+
+def parse_rows(rows):
+    """解析提醒清单（含表头的二维列表），返回 (records, warnings)。"""
     if not rows:
         return [], ["文件为空"]
 

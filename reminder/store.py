@@ -9,42 +9,24 @@ import threading
 DATA_DIR = os.environ.get("REMINDER_DATA_DIR",
                           os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data"))
 
-DEFAULT_BODY = """⏰ 合同到期提醒 | {expiry}
+TEMPLATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates")
 
-▫️ 代表处：{office}
-▫️ 合同名称：{contract_name}
-▫️ 维保类型：{service_type}
-▫️ 合同编号：{contract_no}
-
-📌 续保关键时间节点：
-• 6个月前：启动客户沟通与商机验证
-• 3个月前：制定服务方案/确认维保范围与等级
-• 1个月前：完成合同续签准备
-
-🔧 技术支持：
-• 价值呈现材料准备 联系王雪健 00621410
-• 埃及MSSD团队报价支持
-• AMS团队支持网络巡检（按需）
-
-📢 系统通知：过保通知函已实现自动制作
-请及时联系客户确认续保事宜！
-"""
+with open(os.path.join(TEMPLATE_DIR, "email.html"), encoding="utf-8") as _f:
+    DEFAULT_BODY = _f.read()
 
 DEFAULT_SETTINGS = {
-    # outlook：本机 Outlook 发送（支持定时）；smtp：SMTP 服务器；dryrun：只记录不发送
+    # outlook：本机 Outlook 发送（支持定时和日历邀请）；smtp：SMTP 服务器；dryrun：只记录不发送
     "mailer": "outlook" if sys.platform == "win32" else "dryrun",
-    "default_remind_days": 180,   # Excel 中没有“提醒天数”时使用
-    "max_delay_days": 300,        # 提醒日期距今超过此天数则暂不排定
     "send_hour": 9,               # 定时邮件的发送时刻（本机时间）
-    "max_text_length": 200,
     "cc": "",
-    "subject_template": "{customer} | {amount_fmt}存量经营续保拓展提醒",
+    "subject_template": "{customer} | {amount_fmt}维保过保|续保拓展提醒",
     "body_template": DEFAULT_BODY,
+    "calendar_subject_template": "【过保】{customer} | {amount_fmt} | {service_type}",
     "smtp": {"host": "", "port": 465, "ssl": True, "starttls": False,
              "username": "", "password": "", "sender": ""},
 }
 
-LOG_FIELDS = ["time", "key", "contract_no", "customer", "to", "cc", "action",
+LOG_FIELDS = ["time", "key", "kind", "node", "contract_no", "customer", "expiry", "to", "cc", "action",
               "send_at", "mailer", "status", "error"]
 
 _lock = threading.Lock()
@@ -74,6 +56,8 @@ def load_settings():
     saved = _read_json("settings.json", {})
     settings = {**DEFAULT_SETTINGS, **saved}
     settings["smtp"] = {**DEFAULT_SETTINGS["smtp"], **saved.get("smtp", {})}
+    for key in ("subject_template", "body_template", "calendar_subject_template"):
+        settings[key] = settings.get(key) or DEFAULT_SETTINGS[key]   # 留空表示使用默认模板
     return settings
 
 
@@ -88,14 +72,15 @@ def save_settings(values):
 
 
 def load_recipients():
-    """{"office": {代表处: "a;b"}, "contract": {合同号: "a;b"}}"""
-    data = _read_json("recipients.json", {})
-    return {"office": data.get("office", {}), "contract": data.get("contract", {})}
+    """记住每个最终客户上次填写的邮箱名单：{"customer": {客户: "a;b"}}"""
+    return {"customer": _read_json("recipients.json", {}).get("customer", {})}
 
 
-def save_recipients(values):
-    data = {"office": {k: v for k, v in values.get("office", {}).items() if v.strip()},
-            "contract": {k: v for k, v in values.get("contract", {}).items() if v.strip()}}
+def remember_recipients(records):
+    data = load_recipients()
+    for r in records:
+        if r.get("customer") and r.get("emails"):
+            data["customer"][r["customer"]] = ";".join(r["emails"])
     with _lock:
         _write_json("recipients.json", data)
     return data
@@ -124,5 +109,5 @@ def read_log():
 
 
 def sent_keys():
-    """已成功发送或排定过的提醒，用于防止重复发送。"""
-    return {row["key"] for row in read_log() if row.get("status") == "ok"}
+    """已成功发送或排定过的提醒节点，用于防止重复发送。一条记录可能覆盖多个节点（逗号分隔）。"""
+    return {k for row in read_log() if row.get("status") == "ok" for k in row["key"].split(",") if k}
