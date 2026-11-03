@@ -105,6 +105,15 @@ footer{text-align:center;color:var(--muted);font-size:12px;padding:18px;border-t
 .tabnav{display:flex;gap:4px;margin-bottom:14px;flex-wrap:wrap}
 .tabnav button{border:1px solid var(--border);background:#fff;padding:8px 16px;font-size:13px;cursor:pointer;font-family:inherit;border-radius:8px}
 .tabnav button.active{background:var(--blue);color:#fff;font-weight:700;border-color:var(--blue)}
+/* 虚拟滚动表格（大表） */
+.table-wrap.has-vt{max-height:none;overflow:visible}
+.vt-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:6px 8px;background:#F7F9FC;border-bottom:1px solid var(--border)}
+.vt-q{border:1px solid var(--border);border-radius:6px;padding:4px 10px;font-size:12.5px;width:280px;max-width:100%;font-family:inherit}
+.vt-info{font-size:12px;color:var(--muted)}
+.vt-scroll{overflow:auto;position:relative}
+table.vt-t{table-layout:fixed;min-width:100%}
+table.vt-t td{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle;height:32px;padding:0 9px;line-height:30px}
+table.vt-t tr.vt-pad td{padding:0;border:0;line-height:0}
 </style>
 </head>
 <body>
@@ -114,7 +123,7 @@ footer{text-align:center;color:var(--muted);font-size:12px;padding:18px;border-t
     <h1>维保录入分析（新签 / 续签 智能识别）</h1>
     <div class="sub">依据导入数据自动判定场景 · 报价行 × 续保SN清单 × 发货条码 × 软件授权 × POD × 实际录入 一致性校验</div>
   </div>
-  <span class="ver">v1.0 · 离线可用 · 整合版</span>
+  <span class="ver">v1.1 · 离线可用 · 整合版 · 大数据流式解析</span>
 </header>
 
 <main>
@@ -4364,61 +4373,507 @@ async function u_handleFileOne(key,f){
   }
   u_updateScene();u_updateRunBtn();
 }
-/* ---------- XLSX 解析 Worker（主线程免卡顿；file:// 或加载失败自动回退主线程） ---------- */
-var u_worker=null,u_workerFail=0,u_workerPending=new Map(),u_workerSeq=0;
-function u_workerReady(){
-  if(u_worker!==null)return true;
-  if(u_workerFail===1||typeof Worker==="undefined")return false;
-  try{
-    const w=new Worker("unified-worker.js");
+/* =========================================================================
+ * 数据管道层（Pipeline）— 流式 XLSX 解析 + 内联 Worker
+ *
+ * 旧实现的问题（实测 12 万行 / 25MB 的 Agreement Barcode List）：
+ *   · new Worker("unified-worker.js") 引用了一个不随单文件分发的外部脚本，且 Worker 内没有
+ *     DOMParser → Worker 永远失败，所有解析回退到主线程，页面冻结 10 秒以上；
+ *   · 整个 sheet1.xml（411MB）一次性解码为一个 JS 字符串：单次 decode 11 秒，且逼近
+ *     V8 字符串上限（约 512MB），数据再大一点就直接 "Invalid string length" 失败；
+ *   · 每个单元格值都是这个大字符串的切片（SlicedString），整块 XML 被常驻内存。
+ *
+ * 新实现：
+ *   File ──Blob.slice──▶ ZIP 中央目录（只读尾部几十 KB，不整体读入）
+ *        ──Blob.slice(entry).stream()──▶ DecompressionStream("deflate-raw")
+ *        ──TextDecoder(stream:true)──▶ 增量行扫描（只保留未闭合的尾巴，内存 O(块大小)）
+ *        ──字符串字典（去重 + 断开大串引用）──▶ Int32Array 行编码，分批 postMessage(transfer)
+ *   主线程按批解码为 rows（string[][]，与旧接口完全同构），引擎层无需任何改动。
+ *   XLSX_CORE 自包含、不引用外部变量：以 Function.toString() 拼成 Blob URL 启动 Worker
+ *   （file:// 双击打开同样可用）；Worker 不可用时同一份代码在主线程按时间片运行。
+ * ========================================================================= */
+function XLSX_CORE(){
+  "use strict";
+  const now=(typeof performance!=="undefined"&&performance.now)?function(){return performance.now()}:function(){return Date.now()};
+  const sleep0=function(){return new Promise(function(r){setTimeout(r,0)})};
+
+  /* ---- XML 实体反转义（与旧 xlUnesc 语义一致） ---- */
+  const ENT={"&lt;":"<","&gt;":">","&quot;":'"',"&apos;":"'","&amp;":"&"};
+  const ENT_RE=/&(#x[0-9a-fA-F]+|#\d+|lt|gt|quot|apos|amp);/g;
+  function unesc(s){
+    if(s.indexOf("&")<0)return s;
+    return s.replace(ENT_RE,function(m,e){
+      if(e[0]==="#"){const n=e[1]==="x"||e[1]==="X"?parseInt(e.slice(2),16):parseInt(e.slice(1),10);return String.fromCodePoint(n)}
+      return ENT[m]||m;
+    });
+  }
+
+  /* ---- 字符串字典：同值只存一份；新值复制一份，断开对解压块大字符串的引用 ---- */
+  function Dict(){this.map=new Map();this.map.set("",0);this.list=[""];this.sent=1}
+  Dict.prototype.id=function(s){
+    let k=this.map.get(s);
+    if(k===undefined){
+      if(s.length>12)s=(" "+s).slice(1); // V8：≥13 字符的切片是 SlicedString，会钉住父串；拼接后再切即得到独立副本
+      k=this.list.length;this.list.push(s);this.map.set(s,k);
+    }
+    return k;
+  };
+  Dict.prototype.takeNew=function(){const a=this.list.slice(this.sent);this.sent=this.list.length;return a};
+
+  /* ---- 行编码缓冲：[n, id0..id(n-1)] 连续写入 Int32Array，按批交出（可 transfer，零拷贝） ---- */
+  function Sink(dict,emit,batchRows){
+    this.dict=dict;this.emit=emit;this.batch=batchRows||4000;
+    this.a=new Int32Array(1<<16);this.n=0;this.pending=0;this.rows=0;
+  }
+  Sink.prototype.row=function(ids,cnt){
+    if(this.n+cnt+1>this.a.length){let L=this.a.length*2;while(L<this.n+cnt+1)L*=2;const b=new Int32Array(L);b.set(this.a.subarray(0,this.n));this.a=b}
+    const a=this.a;let n=this.n;
+    a[n++]=cnt;
+    for(let k=0;k<cnt;k++)a[n++]=ids[k];
+    this.n=n;this.rows++;
+    if(++this.pending>=this.batch)this.flush();
+  };
+  Sink.prototype.flush=function(){
+    if(!this.pending&&this.dict.sent===this.dict.list.length)return;
+    const cells=this.a.slice(0,this.n);
+    this.n=0;this.pending=0;
+    this.emit({dict:this.dict.takeNew(),cells:cells});
+  };
+
+  /* ---- sheet XML 增量扫描（单元格语义与旧 readSheetLite 一一对应） ---- */
+  function SheetScanner(sharedIds,dict,sink){
+    this.S=sharedIds;this.d=dict;this.k=sink;this.carry="";this.state=0;this.ids=new Int32Array(256);
+  }
+  SheetScanner.prototype.feed=function(chunk){
+    if(this.state===2)return;
+    const x=this.carry?this.carry+chunk:chunk;this.carry="";
+    let i=0;
+    if(this.state===0){
+      const sd=x.indexOf("<sheetData");
+      if(sd<0){this.carry=x.slice(Math.max(0,x.length-16));return}
+      const g=x.indexOf(">",sd);
+      if(g<0){this.carry=x.slice(sd);return}
+      if(x.charCodeAt(g-1)===47){this.state=2;return} // <sheetData/>：无数据
+      this.state=1;i=g+1;
+    }
+    let ended=false;
+    for(;;){
+      const ro=x.indexOf("<row",i);
+      if(ro<0)break;
+      const c4=x.charCodeAt(ro+4);
+      if(c4!==32&&c4!==62&&c4!==47&&c4!==9&&c4!==10&&c4!==13){
+        if(ro+4>=x.length)break;                  // "<row" 恰在块尾：等下一块
+        i=ro+4;continue;                          // <rowBreaks> 等其他标签
+      }
+      const gt=x.indexOf(">",ro);
+      if(gt<0)break;
+      if(x.charCodeAt(gt-1)===47){this.k.row(this.ids,0);i=gt+1;continue} // <row .../> 空行
+      const rc=x.indexOf("</row>",gt+1);
+      if(rc<0)break;
+      this.row(x,gt+1,rc);
+      i=rc+6;
+    }
+    /* 只在找不到下一个 <row 时检查 </sheetData>（避免每块整段多扫一遍） */
+    if(x.indexOf("</sheetData>",i)>=0)ended=true;
+    if(ended){this.state=2;return}
+    this.carry=i?x.slice(i):x; // 未闭合的尾巴留到下一块
+  };
+  SheetScanner.prototype.row=function(x,p,rc){
+    const d=this.d,S=this.S;let ids=this.ids;let maxCol=0;
+    while(p<rc){
+      const co=x.indexOf("<c",p);
+      if(co<0||co>=rc)break;
+      const cgt=x.indexOf(">",co);
+      if(cgt<0||cgt>rc)break;
+      const selfClose=x.charCodeAt(cgt-1)===47;
+      let colIdx=maxCol+1,t="";
+      /* 属性只在本标签 [co,cgt) 内查找：旧实现 indexOf('t="') 不设上界，整行纯数值单元格时会一路扫到后面的行 */
+      const tag=x.slice(co+2,cgt);
+      const tq=tag.indexOf('t="');
+      if(tq>=0){const te=tag.indexOf('"',tq+3);if(te>=0)t=tag.slice(tq+3,te)}
+      const rq=tag.indexOf('r="');
+      if(rq>=0){const re=tag.indexOf('"',rq+3);if(re>=0){let n=0;for(let k=rq+3;k<re;k++){const c2=tag.charCodeAt(k);if(c2>=65&&c2<=90)n=n*26+(c2-64);else break}if(n>0)colIdx=n}}
+      let id=0;
+      if(!selfClose){
+        const nc=x.indexOf("<c",cgt+1);
+        const ce=nc<0||nc>rc?rc:nc;
+        if(t==="inlineStr"){
+          let txt="",sp=cgt+1;
+          /* 快路径：<is><t>文本</t></is> 单段（导出系统的绝大多数单元格） */
+          const ti0=x.indexOf("<t",sp);
+          if(ti0>=0&&ti0<ce){
+            const tg0=x.indexOf(">",ti0);
+            if(tg0>=0&&tg0<=ce&&x.charCodeAt(tg0-1)!==47){
+              const te0=x.indexOf("</t>",tg0);
+              if(te0>=0&&te0<=ce){
+                txt=x.slice(tg0+1,te0);if(txt.indexOf("&")>=0)txt=unesc(txt);
+                sp=te0+4;
+                if(!x.startsWith("</is>",sp)){ // 富文本多段：继续拼接（循环内自带边界判断）
+                  for(;;){
+                    const ti=x.indexOf("<t",sp);
+                    if(ti<0||ti>=ce)break;
+                    const tg=x.indexOf(">",ti);
+                    if(tg<0||tg>ce)break;
+                    if(x.charCodeAt(tg-1)===47)break;
+                    const te=x.indexOf("</t>",tg);
+                    if(te<0||te>ce)break;
+                    txt+=unesc(x.slice(tg+1,te));
+                    sp=te+4;
+                  }
+                }
+              }
+            }
+          }
+          id=txt===""?0:d.id(txt);
+        }else{
+          const vo=x.indexOf("<v>",cgt+1);
+          if(vo>=0&&vo<ce){
+            const ve=x.indexOf("</v>",vo+3);
+            const vEnd=ve>=0&&ve<ce?ve:ce;
+            if(t==="s"){const sid=S[parseInt(x.slice(vo+3,vEnd),10)];id=sid!==undefined?sid:0}
+            else if(t==="b"){id=d.id(x.slice(vo+3,vEnd)==="1"?"TRUE":"FALSE")}
+            else{const raw=x.slice(vo+3,vEnd);id=raw===""?0:d.id(raw.indexOf("&")>=0?unesc(raw):raw)}
+          }
+        }
+        p=ce;
+      }else{
+        p=cgt+1;
+      }
+      if(colIdx>ids.length){let L=ids.length*2;while(L<colIdx)L*=2;const b=new Int32Array(L);b.set(ids);ids=b;this.ids=b}
+      if(colIdx>maxCol){for(let k=maxCol;k<colIdx-1;k++)ids[k]=0;maxCol=colIdx}
+      ids[colIdx-1]=id;
+    }
+    this.k.row(ids,maxCol);
+  };
+
+  /* ---- sharedStrings 增量扫描（<si> 内全部 <t> 拼接，与旧 parseSharedStrings 一致） ---- */
+  function SstScanner(dict){this.d=dict;this.ids=[];this.carry=""}
+  SstScanner.prototype.feed=function(chunk){
+    const x=this.carry?this.carry+chunk:chunk;let p=0;
+    for(;;){
+      const si=x.indexOf("<si",p);
+      if(si<0)break;
+      const g=x.indexOf(">",si);
+      if(g<0)break;
+      if(x.charCodeAt(g-1)===47){this.ids.push(0);p=g+1;continue} // <si/>
+      const se=x.indexOf("</si>",si);
+      if(se<0)break;
+      let sp=si+3,txt="";
+      for(;;){
+        const ti=x.indexOf("<t",sp);
+        if(ti<0||ti>=se)break;
+        const tg=x.indexOf(">",ti);
+        if(tg<0||tg>=se)break;
+        if(x.charCodeAt(tg-1)===47)break;
+        const te=x.indexOf("</t>",tg);
+        if(te<0||te>se)break;
+        txt+=unesc(x.slice(tg+1,te));
+        sp=te+4;
+      }
+      this.ids.push(txt===""?0:this.d.id(txt));
+      p=se+5;
+    }
+    this.carry=p?x.slice(p):x;
+  };
+
+  /* ---- 无 DecompressionStream 的老浏览器：纯 JS inflate（输出写入可增长 Uint8Array） ---- */
+  const LB=[3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258];
+  const LE=[0,0,0,0,0,0,0,0,1,1,1,1,2,2,2,2,3,3,3,3,4,4,4,4,5,5,5,5,0];
+  const DB=[1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577];
+  const DE=[0,0,0,0,1,1,2,2,3,3,4,4,5,5,6,6,7,7,8,8,9,9,10,10,11,11,12,12,13,13];
+  const CLO=[16,17,18,0,8,7,9,6,10,5,11,4,12,3,13,2,14,1,15];
+  function mkTree(lengths){
+    let ml=0;for(let i=0;i<lengths.length;i++)if(lengths[i]>ml)ml=lengths[i];
+    if(!ml)throw new Error("inflate: 空码表");
+    const count=new Array(ml+1).fill(0);for(let i=0;i<lengths.length;i++)count[lengths[i]]++;count[0]=0;
+    let code=0;const next=new Array(ml+1).fill(0);
+    for(let l=1;l<=ml;l++){code=(code+count[l-1])<<1;next[l]=code}
+    const map=new Map();
+    for(let s=0;s<lengths.length;s++){const l=lengths[s];if(!l)continue;map.set((next[l]<<4)|l,s);next[l]++}
+    return {maxL:ml,map:map};
+  }
+  function inflateRawSync(u8,sizeHint){
+    let out=new Uint8Array(Math.max(1024,sizeHint||u8.length*4)),on=0;
+    function need(n){if(on+n>out.length){let L=out.length*2;while(L<on+n)L*=2;const b=new Uint8Array(L);b.set(out.subarray(0,on));out=b}}
+    let pos=0,bitBuf=0,bitCnt=0;
+    function bits(n){
+      while(bitCnt<n){if(pos>=u8.length)throw new Error("inflate: 数据截断");bitBuf=(bitBuf|(u8[pos++]<<bitCnt))>>>0;bitCnt+=8}
+      const v=(bitBuf&((1<<n)-1))>>>0;bitBuf>>>=n;bitCnt-=n;return v;
+    }
+    function dec(tree){let cur=0;for(let l=1;l<=tree.maxL;l++){cur=(cur<<1)|bits(1);const s=tree.map.get((cur<<4)|l);if(s!==undefined)return s}throw new Error("inflate: 溢出码")}
+    let bfinal;
+    do{
+      bfinal=bits(1);const btype=bits(2);
+      if(btype===0){
+        bitBuf=0;bitCnt=0;
+        if(pos+4>u8.length)throw new Error("inflate: stored 块截断");
+        const len=u8[pos]|(u8[pos+1]<<8),nlen=u8[pos+2]|(u8[pos+3]<<8);pos+=4;
+        if((len^0xFFFF)!==nlen)throw new Error("inflate: stored LEN 校验失败");
+        if(pos+len>u8.length)throw new Error("inflate: stored 数据截断");
+        need(len);out.set(u8.subarray(pos,pos+len),on);on+=len;pos+=len;
+      }else{
+        let lt,dt;
+        if(btype===1){
+          const fl=new Array(288);for(let i=0;i<144;i++)fl[i]=8;for(let i=144;i<256;i++)fl[i]=9;for(let i=256;i<280;i++)fl[i]=7;for(let i=280;i<288;i++)fl[i]=8;
+          lt=mkTree(fl);dt=mkTree(new Array(30).fill(5));
+        }else if(btype===2){
+          const hlit=bits(5)+257,hdist=bits(5)+1,hclen=bits(4)+4;
+          const cll=new Array(19).fill(0);for(let i=0;i<hclen;i++)cll[CLO[i]]=bits(3);
+          const clt=mkTree(cll);const lens=new Array(hlit+hdist).fill(0);let i=0;
+          while(i<lens.length){
+            const sym=dec(clt);
+            if(sym<16)lens[i++]=sym;
+            else if(sym===16){if(i===0)throw new Error("inflate: 重复码无前值");const rep=bits(2)+3,v=lens[i-1];for(let j=0;j<rep&&i<lens.length;j++)lens[i++]=v}
+            else if(sym===17)i+=bits(3)+3;
+            else i+=bits(7)+11;
+          }
+          lt=mkTree(lens.slice(0,hlit));dt=mkTree(lens.slice(hlit));
+        }else throw new Error("inflate: 非法块类型");
+        for(;;){
+          const sym=dec(lt);
+          if(sym<256){need(1);out[on++]=sym}
+          else if(sym===256)break;
+          else{
+            const li=sym-257,len=LB[li]+(LE[li]?bits(LE[li]):0);
+            const ds=dec(dt),dist=DB[ds]+(DE[ds]?bits(DE[ds]):0);
+            if(dist>on)throw new Error("inflate: 距离越过窗口起点");
+            need(len);const st=on-dist;for(let k=0;k<len;k++)out[on++]=out[st+k];
+          }
+        }
+      }
+    }while(!bfinal);
+    return out.subarray(0,on);
+  }
+
+  /* ---- ZIP：只读尾部定位中央目录，条目按需切片读取（大文件不整体读入内存） ---- */
+  async function readU8(blob,a,b){return new Uint8Array(await blob.slice(a,b).arrayBuffer())}
+  async function zipDir(file){
+    const size=file.size;
+    const tail=await readU8(file,Math.max(0,size-22-65536),size);
+    const dv=new DataView(tail.buffer,tail.byteOffset,tail.byteLength);
+    let eocd=-1;
+    for(let i=tail.length-22;i>=0;i--){if(dv.getUint32(i,true)===0x06054b50){eocd=i;break}}
+    if(eocd<0)throw new Error("无法定位 ZIP 目录（文件可能不是有效的 .xlsx）");
+    const cdCount=dv.getUint16(eocd+10,true),cdSize=dv.getUint32(eocd+12,true),cdOff=dv.getUint32(eocd+16,true);
+    const cd=await readU8(file,cdOff,cdOff+cdSize);
+    const cv=new DataView(cd.buffer,cd.byteOffset,cd.byteLength);
+    const dec=new TextDecoder("utf-8");
+    const ents=new Map();let p=0;
+    for(let k=0;k<cdCount;k++){
+      if(p+46>cd.length||cv.getUint32(p,true)!==0x02014b50)throw new Error("ZIP 中央目录损坏");
+      const nlen=cv.getUint16(p+28,true),elen=cv.getUint16(p+30,true),clen=cv.getUint16(p+32,true);
+      const name=dec.decode(cd.subarray(p+46,p+46+nlen));
+      ents.set(name,{name:name,method:cv.getUint16(p+10,true),csize:cv.getUint32(p+20,true),usize:cv.getUint32(p+24,true),lho:cv.getUint32(p+42,true)});
+      p+=46+nlen+elen+clen;
+    }
+    return ents;
+  }
+  async function entryBlob(file,e){
+    const lh=await readU8(file,e.lho,e.lho+30);
+    const dv=new DataView(lh.buffer,lh.byteOffset,lh.byteLength);
+    if(lh.length<30||dv.getUint32(0,true)!==0x04034b50)throw new Error("ZIP 本地文件头损坏："+e.name);
+    const start=e.lho+30+dv.getUint16(26,true)+dv.getUint16(28,true);
+    return file.slice(start,start+e.csize);
+  }
+  /* 条目流式解码为文本块（约 512KB 一块）回调 onText；onProg(0..1) 按解压字节计 */
+  async function streamText(file,e,onText,onProg,yieldMs){
+    const blob=await entryBlob(file,e);
+    let stream=null;
+    if(e.method===0)stream=blob.stream();
+    else if(e.method===8){
+      if(typeof DecompressionStream!=="undefined")stream=blob.stream().pipeThrough(new DecompressionStream("deflate-raw"));
+      else stream=new Blob([inflateRawSync(new Uint8Array(await blob.arrayBuffer()),e.usize)]).stream();
+    }else throw new Error("不支持的 ZIP 压缩方式("+e.method+")："+e.name);
+    const dec=new TextDecoder("utf-8");const rd=stream.getReader();
+    let got=0,last=now(),pieces=[],plen=0;
+    for(;;){
+      const r=await rd.read();
+      if(r.done)break;
+      got+=r.value.length;
+      const s=dec.decode(r.value,{stream:true});
+      if(s){pieces.push(s);plen+=s.length}
+      if(plen>=(1<<19)){onText(pieces.length===1?pieces[0]:pieces.join(""));pieces=[];plen=0;if(onProg&&e.usize)onProg(Math.min(1,got/e.usize))}
+      if(yieldMs&&now()-last>yieldMs){await sleep0();last=now()}
+    }
+    const t=dec.decode();if(t)pieces.push(t);
+    if(pieces.length)onText(pieces.join(""));
+    if(onProg)onProg(1);
+  }
+  async function entryText(file,e){let s="";await streamText(file,e,function(t){s+=t},null,0);return s}
+
+  /* 第一个工作表路径：workbook.xml 第一个 <sheet r:id> → rels Target（正则解析，Worker 内无 DOMParser） */
+  async function firstSheetEntry(file,ents){
+    let rid="",target="";
+    const wb=ents.get("xl/workbook.xml");
+    if(wb){
+      const x=await entryText(file,wb);
+      const m=/<(?:[\w.-]+:)?sheet\b[^>]*>/.exec(x);
+      if(m){const a=/\sr:id="([^"]*)"/.exec(m[0]);if(a)rid=a[1]}
+    }
+    const rl=ents.get("xl/_rels/workbook.xml.rels");
+    if(rid&&rl){
+      const x=await entryText(file,rl);
+      const re=/<(?:[\w.-]+:)?Relationship\b[^>]*>/g;let m;
+      while((m=re.exec(x))){
+        const id=/\sId="([^"]*)"/.exec(m[0]);
+        if(id&&id[1]===rid){const tg=/\sTarget="([^"]*)"/.exec(m[0]);if(tg)target=tg[1];break}
+      }
+    }
+    const cands=[];
+    if(target){
+      let t=target.replace(/^\.\//,"");
+      if(t[0]==="/")cands.push(t.slice(1));
+      else if(t.indexOf("xl/")===0)cands.push(t);
+      else cands.push("xl/"+t);
+      cands.push(t.replace(/^\/?(xl\/)?/,""));
+    }
+    for(const k of ents.keys()){if(/^\/?xl\/worksheets\/sheet\d+\.xml$/.test(k)){cands.push(k);break}}
+    for(const c of cands){if(ents.has(c))return ents.get(c)}
+    throw new Error("未找到工作表文件（不是标准 .xlsx）");
+  }
+
+  /* 主入口：XLSX → 分批 emit({dict,cells})，返回 {rows} */
+  async function parseXlsx(file,opt){
+    opt=opt||{};
+    const dict=new Dict(),sink=new Sink(dict,opt.emit,opt.batchRows);
+    const ents=await zipDir(file);
+    const sheetE=await firstSheetEntry(file,ents);
+    let sstE=ents.get("xl/sharedStrings.xml")||null;
+    if(!sstE){for(const k of ents.keys()){if(/^\/?xl\/sharedStrings\.xml$/i.test(k)){sstE=ents.get(k);break}}}
+    const total=(sheetE.usize||1)+(sstE?(sstE.usize||0):0);
+    const prog=opt.onProg||null;
+    let shared=[];
+    if(sstE){
+      const sc=new SstScanner(dict);
+      await streamText(file,sstE,function(s){sc.feed(s)},prog?function(f){prog(f*(sstE.usize||0)/total)}:null,opt.yieldMs||0);
+      shared=sc.ids;
+    }
+    const base=sstE?(sstE.usize||0):0;
+    const sh=new SheetScanner(shared,dict,sink);
+    await streamText(file,sheetE,function(s){sh.feed(s)},prog?function(f){prog((base+f*(sheetE.usize||1))/total)}:null,opt.yieldMs||0);
+    if(sh.state===0)throw new Error("工作表无数据");
+    sink.flush();
+    return {rows:sink.rows};
+  }
+
+  /* CSV（与旧 parseCsvText 逐字一致；Blob.text() 按 UTF-8 解码并去 BOM，同 FileReader.readAsText） */
+  function parseCsvText(text){
+    const rows=[];let row=[],cur="",inQ=false;
+    for(let i=0;i<text.length;i++){
+      const ch=text[i];
+      if(inQ){
+        if(ch==='"'){if(text[i+1]==='"'){cur+='"';i++}else inQ=false}
+        else cur+=ch;
+      }else if(ch==='"'){inQ=true}
+      else if(ch===","){row.push(cur);cur=""}
+      else if(ch==="\n"){row.push(cur);rows.push(row);row=[];cur=""}
+      else if(ch!=="\r"){cur+=ch}
+    }
+    if(cur!==""||row.length){row.push(cur);rows.push(row)}
+    return rows;
+  }
+  async function parseCsv(file,opt){
+    opt=opt||{};
+    const text=(await file.text()).replace(/^﻿/,"");
+    const rows=parseCsvText(text);
+    const dict=new Dict(),sink=new Sink(dict,opt.emit,opt.batchRows);
+    let ids=new Int32Array(256),last=now();
+    for(let r=0;r<rows.length;r++){
+      const row=rows[r];
+      if(row.length>ids.length)ids=new Int32Array(row.length*2);
+      for(let k=0;k<row.length;k++)ids[k]=d_id(dict,row[k]);
+      sink.row(ids,row.length);
+      if(opt.yieldMs&&(r&1023)===0&&now()-last>opt.yieldMs){await sleep0();last=now()}
+    }
+    sink.flush();
+    if(opt.onProg)opt.onProg(1);
+    return {rows:sink.rows};
+  }
+  function d_id(dict,s){return s===""?0:dict.id(s)}
+
+  return {parseXlsx:parseXlsx,parseCsv:parseCsv,parseCsvText:parseCsvText,inflateRawSync:inflateRawSync};
+}
+
+/* Worker 入口（与 XLSX_CORE 一起拼成 Blob 源码；此函数不在主线程执行） */
+function u_workerMain(){
+  const core=XLSX_CORE();
+  self.onmessage=async function(ev){
+    const m=ev.data;
+    let lastP=-1;
+    const onProg=function(f){const q=Math.floor(f*100);if(q!==lastP){lastP=q;self.postMessage({t:"p",pct:q})}};
+    const emit=function(b){self.postMessage({t:"b",dict:b.dict,cells:b.cells},[b.cells.buffer])};
+    try{
+      const r=m.csv?await core.parseCsv(m.file,{emit:emit,onProg:onProg}):await core.parseXlsx(m.file,{emit:emit,onProg:onProg});
+      self.postMessage({t:"done",rows:r.rows});
+    }catch(e){self.postMessage({t:"err",msg:String(e&&e.message||e)})}
+  };
+}
+
+/* ---------- 主线程侧：Worker 池（每个文件一个短命 Worker，结束即 terminate 释放内存） ---------- */
+const U_PIPE={
+  workerOK:typeof Worker!=="undefined"&&typeof Blob!=="undefined"&&typeof URL!=="undefined"&&!!URL.createObjectURL,
+  url:null,core:null,active:0,waiters:[],
+  max:Math.max(1,Math.min(3,((typeof navigator!=="undefined"&&navigator.hardwareConcurrency)||4)-1))
+};
+function u_workerUrl(){
+  if(!U_PIPE.url)U_PIPE.url=URL.createObjectURL(new Blob(["\"use strict\";\nconst XLSX_CORE="+XLSX_CORE.toString()+";\n("+u_workerMain.toString()+")();\n"],{type:"text/javascript"}));
+  return U_PIPE.url;
+}
+function u_slot(){return new Promise(function(res){if(U_PIPE.active<U_PIPE.max){U_PIPE.active++;res()}else U_PIPE.waiters.push(res)})}
+function u_slotFree(){const n=U_PIPE.waiters.shift();if(n)n();else U_PIPE.active--}
+/* 批解码：dict 增量追加；cells=[n,id..] → string[]（packed 数组，与旧 rows 同构） */
+function u_decodeBatch(rows,dict,b){
+  const add=b.dict;for(let i=0;i<add.length;i++)dict.push(add[i]);
+  const c=b.cells,L=c.length;let p=0;
+  while(p<L){
+    const n=c[p++];const row=[];
+    for(let k=0;k<n;k++)row.push(dict[c[p++]]);
+    rows.push(row);
+  }
+}
+function u_parseInWorker(f,csv,onProg){
+  return new Promise(function(res,rej){
+    let w;
+    try{w=new Worker(u_workerUrl())}catch(e){const er=new Error("Worker 不可用："+e.message);er.noWorker=true;rej(er);return}
+    const rows=[],dict=[""];let alive=false;
     w.onmessage=function(ev){
-      const m=ev.data,p=u_workerPending.get(m.id);
-      if(!p)return;u_workerPending.delete(m.id);
-      if(m.type==="rows")p.res(m.rows);
-      else if(m.type==="progress"){if(p.onProg)p.onProg(m.pct)}
-      else p.rej(new Error(m.msg||"worker 解析失败"));
+      const m=ev.data;alive=true;
+      if(m.t==="b")u_decodeBatch(rows,dict,m);
+      else if(m.t==="p"){if(onProg)onProg(m.pct)}
+      else if(m.t==="done"){w.terminate();res(rows)}
+      else if(m.t==="err"){w.terminate();rej(new Error(m.msg))}
     };
-    w.onerror=function(){
-      u_workerFail=1;
-      if(u_worker)try{u_worker.terminate()}catch(e){}
-      u_worker=null;
-      const pend=u_workerPending;u_workerPending=new Map();
-      pend.forEach(function(p){p.rej(new Error("worker 不可用"))});
+    w.onerror=function(ev){
+      if(ev&&ev.preventDefault)ev.preventDefault();
+      try{w.terminate()}catch(e){}
+      const er=new Error("解析线程异常"+(ev&&ev.message?"："+ev.message:"（可能内存不足）"));
+      er.noWorker=!alive; // 一条消息都没收到 = Worker 本身起不来（受限环境），回退主线程
+      rej(er);
     };
-    u_worker=w;return true;
-  }catch(e){u_workerFail=1;return false}
+    w.postMessage({file:f,csv:csv});
+  });
+}
+async function u_parseOnMain(f,csv,onProg){
+  const core=U_PIPE.core||(U_PIPE.core=XLSX_CORE());
+  const rows=[],dict=[""];
+  const opt={emit:function(b){u_decodeBatch(rows,dict,b)},onProg:onProg?function(x){onProg(Math.floor(x*100))}:null,yieldMs:30};
+  if(csv)await core.parseCsv(f,opt);else await core.parseXlsx(f,opt);
+  return rows;
 }
 async function u_readRows(f,onProg){
-  if(/\.csv$/i.test(f.name)){
-    const txt=await u_readFile(f,true);
-    return W.XLSX.parseCsvText(txt);
+  const csv=/\.csv$/i.test(f.name);
+  let rows=null;
+  if(U_PIPE.workerOK){
+    await u_slot();
+    try{rows=await u_parseInWorker(f,csv,onProg)}
+    catch(e){if(!e.noWorker)throw e;U_PIPE.workerOK=false;console.warn("[pipeline] Worker 不可用，回退主线程分片解析",e)}
+    finally{u_slotFree()}
   }
-  const trimHead=function(rows){
-    if(!rows||!rows[0])throw new Error("Excel 无内容（空文件？）");
-    return rows.map((row,i)=>i===0?row.map(h=>String(h==null?"":h).trim()):row);
-  };
-  if(u_workerReady()){
-    // Worker 优先：主线程不阻塞（zip 解压 + 超 400MB sheet 解析都在后台线程）
-    const buf=await u_readFile(f,false);
-    try{
-      const rows=await new Promise(function(res,rej){
-        const id=++u_workerSeq;
-        u_workerPending.set(id,{res:res,rej:rej,onProg:onProg||null});
-        try{u_worker.postMessage({type:"parse",id:id,name:f.name,buf:buf},[buf])}
-        catch(e){u_workerPending.delete(id);rej(e)}
-      });
-      return trimHead(rows);
-    }catch(e){
-      // worker 失败/超时/不可用 → 回退主线程（buf 已被 transfer 走，需重读文件）
-      if(u_workerFail!==1)u_workerFail=1;
-      const buf2=await u_readFile(f,false);
-      const rows2=await W.XLSX.readWorkbook(buf2,onProg||null);
-      return trimHead(rows2);
-    }
-  }
-  const buf=await u_readFile(f,false);
-  const rows=await W.XLSX.readWorkbook(buf,onProg||null);
-  return trimHead(rows);
+  if(!rows)rows=await u_parseOnMain(f,csv,onProg);
+  if(csv)return rows; // 与旧实现一致：CSV 不做表头 trim
+  if(!rows||!rows[0])throw new Error("Excel 无内容（空文件？）");
+  rows[0]=rows[0].map(function(h){return String(h==null?"":h).trim()});
+  return rows;
 }
 function u_rowsToRaw(rows){
   if(!rows||!rows.length)return null;
@@ -4460,7 +4915,7 @@ function u_err(msg){
 function u_clrErr(){(u_$("errBox").style.display="none")}
 
 /* ---------------- 新签分析 ---------------- */
-function u_runNew(){
+async function u_runNew(){
   if(!UP.quote||!UP.bl||!UP.sub){
     u_err("新签必需输入缺失：① 服务报价行 ＋ ③ 发货条码数据 ＋ ⑥ 录入硬件子行（当前：报价行="+(UP.quote&&UP.quote.rows.length)+" 条、发货条码="+(UP.bl&&(UP.bl.rows||UP.blRaw.data).length)+" 行、硬件录入="+(UP.sub&&UP.sub.rows.length)+" 行）");
     return
@@ -4473,7 +4928,9 @@ function u_runNew(){
     });
   }catch(err){u_err("数据装配失败："+err.message);console.error(err);return}
   let A;
+  await u_stage("⏳ 新签判定中…");
   try{A=W.New.analyzeNew()}catch(err){u_err("新签分析失败："+err.message);console.error(err);return}
+  await u_stage("⏳ 比对实际录入…");
   try{
     const cmp=u_buildNewCmp(A);
     W.Compare=cmp;
@@ -4649,7 +5106,7 @@ function u_buildNewCmp(A){
 }
 
 /* ---------------- 续签分析 ---------------- */
-function u_runRenew(){
+async function u_runRenew(){
   if(!UP.renew||!UP.blRaw||!UP.sub){
     u_err("续签必需输入缺失：② 续保SN清单 ＋ ③ 发货条码数据 ＋ ⑥ 录入硬件子行（当前：续保SN清单="+(UP.renew?UP.renew.unique+" 个":"--")+"、发货条码="+(UP.blRaw&&UP.blRaw.data.length)+" 行、硬件录入="+(UP.sub&&UP.sub.rows.length)+" 行）");
     return
@@ -4676,7 +5133,9 @@ function u_runRenew(){
     W.Renew.setQuoteData(quoteSet,quoteInfo,quoteMedia,quoteMediaInfo,quoteNonMedia,quoteMultiPkg);
     // ② 发货数据 → 逐条码 Y/N 级联判定
     const {headers,data}=UP.blRaw;
+    await u_stage("⏳ 级联判定中（"+data.length+" 行）…");
     const A=W.Renew.analyze(headers,data,quoteSet);
+    await u_stage("⏳ 比对实际录入…");
     const yl=W.Renew.buildYList(A);
     // ③ 实际录入（硬件子行 + 软件），构造 [bc,svc,start,end,endManual]
     const actualRows=[];
@@ -4697,6 +5156,7 @@ function u_runRenew(){
     A.data.forEach(function(row,i){const e=String(A.effBc[i]||"").trim();if(e)effSet.add(e)});
     const unmatched=[...quoteSet].filter(sn=>!effSet.has(sn));
     const matchedCount=quoteSet.size-unmatched.length;
+    await u_stage("⏳ 渲染结果…");
     u_showResult({scene:"renew",A:A,yl:yl,quoteSet:quoteSet,quoteInfo:quoteInfo,quoteMedia:quoteMedia,
       qp:qp,cmp:cmp,quoteVs:quoteVs,lacCheckRows:lacCheckRows,
       matchedCount:matchedCount,unmatchedCount:unmatched.length,unmatched:unmatched});
@@ -4706,14 +5166,14 @@ function u_runRenew(){
 }
 /* 报价行 vs 续保SN清单 数量核对（按 服务包编码+关联ITEM+时长 比对） */
 function u_buildQuoteVs(quoteRows,qp){
-  const qRows=[];
+  const qRows=[],qIdx=new Map();
   (quoteRows||[]).forEach(function(r){
     const svc=String(r.svcPkg||"").trim(),item=String(r.item||"").trim(),dur=String(r.dur==null?"":r.dur).trim();
     if(!svc&&!item)return;
     const k=(svc+"|"+item+"|"+dur).toUpperCase();
-    const find=qRows.find(x=>x.key===k);
+    const find=qIdx.get(k);
     if(find)find.quoQty+=(+r.qty||0);
-    else qRows.push({key:k,svcPkg:svc,item:item,dur:dur,quoQty:(+r.qty||0),coa:r.coa||"",svcCoa:r.svcCoa||"",swWt:/^8/.test(item)||String(r.svcCoa||"")==="9221724"});
+    else{const o={key:k,svcPkg:svc,item:item,dur:dur,quoQty:(+r.qty||0),coa:r.coa||"",svcCoa:r.svcCoa||"",swWt:/^8/.test(item)||String(r.svcCoa||"")==="9221724"};qIdx.set(k,o);qRows.push(o)}
   });
   const renewAgg=new Map();
   (qp.records||[]).forEach(function(rc){
@@ -4818,11 +5278,22 @@ function u_buildLacRows(A,qp){
   out.sort(function(a,b){return (order[a.status]-order[b.status])||0});
   return out;
 }
-function u_run(){
+/* 分析编排：分阶段执行，阶段间让出一帧（按钮显示进度、页面不“假死”）；防重复点击 */
+function u_frame(){return new Promise(function(r){let done=false;const f=function(){if(!done){done=true;setTimeout(r,0)}};if(typeof requestAnimationFrame==="function")requestAnimationFrame(f);setTimeout(f,100)})}
+async function u_stage(text){const b=u_$("btnRun");if(b)b.innerHTML=text;await u_frame()}
+let u_running=false;
+async function u_run(){
+  if(u_running)return;
+  u_running=true;
   u_clrErr();
-  if(u_scene==="renew")u_runRenew();else u_runNew();
-  window.scrollTo({top:0,behavior:"smooth"});
+  const btn=u_$("btnRun");btn.disabled=true;
+  try{
+    await u_stage("⏳ 分析中…");
+    if(u_scene==="renew")await u_runRenew();else await u_runNew();
+    window.scrollTo({top:0,behavior:"smooth"});
+  }finally{u_running=false;u_updateRunBtn()}
 }
+
 
 /* ======================= 渲染：统计卡 + Tab ======================= */
 function u_showResult(obj){
@@ -4848,16 +5319,128 @@ function u_renderTabs(){
   }));
 }
 
-/* ---------- 通用表格渲染器 ---------- */
-const U_TABLE_MAX=20000; // 单表渲染行数上限：超大明细（10万+行发货数据）全量拼 HTML 会卡死浏览器，截断展示 + 提示，统计与导出不受影响
+/* ---------- 通用表格渲染器（视图层） ----------
+ * 旧实现：把最多 20000 行一次性拼成 <table> 插入 DOM（实测 22 万个节点、布局 10.9 秒），
+ *         超出部分直接截断不显示；4 个 Tab 全部同时渲染。
+ * 新实现：≤ U_VT.STATIC_MAX 行保持原静态表格；更大的表改为虚拟滚动——
+ *         只渲染可视区约 40 行，DOM 规模与数据量无关，全量数据都可滚动查看，并支持表内筛选。
+ *         行数据按需生成（rowAt(i)），12 万行明细无需预先构造 12 万个对象。
+ * 用法不变：u_table(headers, rows, rowCls) 返回 HTML 字符串；rows 可为数组或 u_lazy(arr, fn) 惰性行源。 */
+const U_VT={seq:0,models:new Map(),STATIC_MAX:300,ROW_H:32,VIEW_H:520,OVERSCAN:10,obs:null};
+const U_TABLE_MAX=Infinity; // 兼容旧常量：虚拟滚动后不再截断
+function u_lazy(arr,fn){return {__lazy:true,length:arr.length,get:function(i){return fn(arr[i],i)}}}
+function u_rowsGet(rows){return rows&&rows.__lazy?rows.get:function(i){return rows[i]}}
 function u_table(headers,rows,rowCls){
   if(!rows||!rows.length)return '<div style="padding:14px;color:var(--muted);font-size:13px">— 无数据 —</div>';
-  const total=rows.length;
-  const shown=total>U_TABLE_MAX?rows.slice(0,U_TABLE_MAX):rows;
-  return '<table class="grid"><thead><tr>'+headers.map(function(h){return "<th>"+u_esc(h)+"</th>"}).join("")+"</tr></thead><tbody>"
-    +shown.map(function(r,i){return '<tr class="'+((rowCls&&rowCls(r,i))||"")+'">'+headers.map(function(h){return "<td>"+(r[h]!=null?r[h]:"")+"</td>"}).join("")+"</tr>"}).join("")
-    +"</tbody></table>"
-    +(total>U_TABLE_MAX?'<div style="padding:8px 12px;margin:6px 0;font-size:12.5px;color:#8a6d1d;background:#fff8e1;border:1px solid #f0d9a0;border-radius:4px">⚠️ 数据量过大：共 <b>'+total+'</b> 行，仅显示前 <b>'+U_TABLE_MAX+'</b> 行。统计数值与导出文件均为全量数据。</div>':"");
+  const get=u_rowsGet(rows);
+  if(rows.length>U_VT.STATIC_MAX)
+    return u_vtable(headers,rows.length,get,rowCls?function(i){return rowCls(get(i),i)}:null);
+  let html='<table class="grid"><thead><tr>'+headers.map(function(h){return "<th>"+u_esc(h)+"</th>"}).join("")+"</tr></thead><tbody>";
+  for(let i=0;i<rows.length;i++){
+    const r=get(i);
+    html+='<tr class="'+((rowCls&&rowCls(r,i))||"")+'">'+headers.map(function(h){return "<td>"+(r[h]!=null?r[h]:"")+"</td>"}).join("")+"</tr>";
+  }
+  return html+"</tbody></table>";
+}
+function u_vtable(headers,count,rowAt,clsAt){
+  const id=++U_VT.seq;
+  U_VT.models.set(id,{id:id,headers:headers,count:count,rowAt:rowAt,clsAt:clsAt,idx:null,text:null,ftok:0,rowH:U_VT.ROW_H,f0:-1,f1:-1});
+  u_vtObserve();
+  return '<div class="vt" data-vt="'+id+'"></div>';
+}
+/* 占位 div 被任何 innerHTML 插入文档后自动挂载（MutationObserver），调用方无需改动 */
+function u_vtObserve(){
+  if(U_VT.obs||typeof MutationObserver==="undefined")return;
+  U_VT.obs=new MutationObserver(u_vtMountAll);
+  U_VT.obs.observe(document.body,{childList:true,subtree:true});
+}
+function u_vtMountAll(){
+  const els=document.querySelectorAll(".vt[data-vt]:not(.vt-on)");
+  for(let i=0;i<els.length;i++)u_vtMount(els[i]);
+  U_VT.models.forEach(function(m,id){if(m.el&&!m.el.isConnected)U_VT.models.delete(id)}); // 被替换掉的旧表释放
+}
+function u_vtPlain(v){
+  const s=String(v==null?"":v);
+  if(s.indexOf("<")<0&&s.indexOf("&")<0)return s;
+  return s.replace(/<[^>]*>/g,"").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&amp;/g,"&");
+}
+function u_vtWidth(s){let w=0;for(let i=0;i<s.length&&w<80;i++)w+=s.charCodeAt(i)>255?2:1;return w}
+function u_vtMount(el){
+  const m=U_VT.models.get(+el.getAttribute("data-vt"));
+  if(!m)return;
+  el.classList.add("vt-on");m.el=el;
+  const wrap=el.closest&&el.closest(".table-wrap");if(wrap)wrap.classList.add("has-vt");
+  /* 列宽：表头 + 均匀抽样 400 行的文本宽度（table-layout:fixed，滚动时列宽不跳动） */
+  const H=m.headers,w=H.map(function(h){return u_vtWidth(String(h))+2});
+  const N=Math.min(m.count,400);
+  for(let k=0;k<N;k++){
+    const i=Math.floor(k*m.count/N),r=m.rowAt(i);
+    for(let j=0;j<H.length;j++){const L=u_vtWidth(u_vtPlain(r[H[j]]));if(L>w[j])w[j]=L}
+  }
+  const px=w.map(function(L){return Math.round(Math.max(56,Math.min(420,L*7+24)))});
+  const tw=px.reduce(function(a,b){return a+b},0);
+  el.innerHTML='<div class="vt-bar"><input type="search" class="vt-q" placeholder="🔍 表内筛选（条码 / COA / 任意文字）"><span class="vt-info"></span></div>'
+    +'<div class="vt-scroll" style="height:'+U_VT.VIEW_H+'px"><table class="grid vt-t" style="width:'+tw+'px"><colgroup>'
+    +px.map(function(p){return '<col style="width:'+p+'px">'}).join("")
+    +'</colgroup><thead><tr>'+H.map(function(h){return "<th>"+u_esc(h)+"</th>"}).join("")+'</tr></thead><tbody></tbody></table></div>';
+  m.scroll=el.querySelector(".vt-scroll");m.tbody=el.querySelector("tbody");m.info=el.querySelector(".vt-info");
+  let raf=0;
+  m.scroll.addEventListener("scroll",function(){if(!raf)raf=requestAnimationFrame(function(){raf=0;u_vtRender(m)})},{passive:true});
+  let tmr=0;
+  el.querySelector(".vt-q").addEventListener("input",function(e){const q=e.target.value;clearTimeout(tmr);tmr=setTimeout(function(){u_vtFilter(m,q)},250)});
+  u_vtInfo(m);
+  u_vtRender(m);
+}
+function u_vtInfo(m,extra){
+  const n=m.idx?m.idx.length:m.count;
+  m.info.textContent=(m.idx?"筛选命中 "+n+" / ":"")+"共 "+m.count+" 行"+(extra||"")+" · 虚拟滚动（仅渲染可见行，统计与导出均为全量）";
+}
+function u_vtRender(m,force){
+  const n=m.idx?m.idx.length:m.count,rh=m.rowH,H=m.headers;
+  const top=m.scroll.scrollTop;
+  const first=Math.max(0,Math.floor(top/rh)-U_VT.OVERSCAN);
+  const last=Math.min(n,Math.ceil((top+U_VT.VIEW_H)/rh)+U_VT.OVERSCAN);
+  if(!force&&first===m.f0&&last===m.f1)return;
+  m.f0=first;m.f1=last;
+  const pad=function(h){return h>0?'<tr class="vt-pad"><td colspan="'+H.length+'" style="height:'+h+'px"></td></tr>':""};
+  let html=pad(first*rh);
+  for(let k=first;k<last;k++){
+    const i=m.idx?m.idx[k]:k,r=m.rowAt(i);
+    html+='<tr class="'+((m.clsAt&&m.clsAt(i))||"")+'">';
+    for(let j=0;j<H.length;j++){
+      const v=r[H[j]],s=v!=null?String(v):"";
+      html+='<td title="'+u_esc(u_vtPlain(s))+'">'+s+"</td>";
+    }
+    html+="</tr>";
+  }
+  html+=pad((n-last)*rh);
+  if(!n)html='<tr><td colspan="'+H.length+'" style="color:var(--muted)">— 无匹配行 —</td></tr>';
+  m.tbody.innerHTML=html;
+  /* 首次可见时校准真实行高（字体/缩放差异），偏差则重排一次 */
+  if(!m.measured&&m.scroll.offsetParent!==null){
+    const tr=m.tbody.querySelector("tr:not(.vt-pad)");
+    if(tr){const h=tr.getBoundingClientRect().height;m.measured=true;if(h>4&&Math.abs(h-rh)>0.5){m.rowH=h;u_vtRender(m,true)}}
+  }
+}
+/* 表内筛选：首次筛选时分片构建纯文本索引（不阻塞 UI），之后每次筛选为一次线性扫描 */
+async function u_vtFilter(m,q){
+  q=String(q||"").trim().toLowerCase();
+  const tok=++m.ftok;
+  if(!q){m.idx=null;u_vtInfo(m);m.scroll.scrollTop=0;u_vtRender(m,true);return}
+  if(!m.text){
+    const text=new Array(m.count),H=m.headers;
+    for(let i=0;i<m.count;i++){
+      const r=m.rowAt(i);let s="";
+      for(let j=0;j<H.length;j++)s+=u_vtPlain(r[H[j]])+"\u0001";
+      text[i]=s.toLowerCase();
+      if((i&4095)===4095){u_vtInfo(m,"（建立筛选索引 "+Math.round(i/m.count*100)+"%）");await new Promise(function(r){setTimeout(r,0)});if(tok!==m.ftok)return}
+    }
+    m.text=text;
+  }
+  const t=m.text,hit=[];
+  for(let i=0;i<t.length;i++)if(t[i].indexOf(q)>=0)hit.push(i);
+  if(tok!==m.ftok)return;
+  m.idx=hit;u_vtInfo(m);m.scroll.scrollTop=0;u_vtRender(m,true);
 }
 function u_badge(text,kind){
   const map={"y":"badge-y","n":"badge-n","w":"badge-w","m":"badge-m"};
@@ -4948,7 +5531,135 @@ function u_download(name,content,mime){
   const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();
   setTimeout(()=>URL.revokeObjectURL(a.href),2000);
 }
-async function u_exportXlsx(){ if(!u_result){u_err("请先完成分析");return} u_log("正在生成 Excel（数据量大，请稍候）…"); try{ const sheets=u_exportSheets(); if(W.XLSX.buildXlsx){ await W.XLSX.buildXlsx(sheets,"warranty-report-"+u_stamp()+".xlsx"); u_log("Excel 导出完成"); } else{u_err("xlsx 导出模块未加载，请用 CSV 导出")} }catch(e){ u_err("Excel 导出失败："+(e&&e.message||e)); } }
+/* ======================= 导出层 · 流式 XLSX 写出 =======================
+ * 旧实现：每个单元格先建 {ref,text,...} 对象 → 整张表拼成一个巨型 XML 字符串 → 一次性 TextEncoder
+ *         → 逐位（每字节 8 次循环）计算 CRC32 → 整体压缩；实测 14.7 秒且全程冻结。
+ * 新实现：按 2000 行一块生成 XML（输出与旧实现逐字节一致）→ 分块编码 → 查表 CRC32 增量累加
+ *         → 边写边喂 CompressionStream（压缩在浏览器原生线程）→ Blob 拼装，块间让出主线程。 */
+const U_CRC_T=(function(){const t=new Int32Array(256);for(let n=0;n<256;n++){let c=n;for(let k=0;k<8;k++)c=(c&1)?(0xEDB88320^(c>>>1)):(c>>>1);t[n]=c}return t})();
+function u_crc32(c,u8){for(let i=0,L=u8.length;i<L;i++)c=U_CRC_T[(c^u8[i])&255]^(c>>>8);return c}
+function u_xmlEsc(s){return String(s==null?"":s).replace(/[&<>"']/g,function(c){return{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&apos;"}[c]})}
+/* XML 1.0 不允许的控制字符会让 Excel 报“文件损坏”：写出前剔除（旧实现未处理） */
+const U_XML_BAD=/[\x00-\x08\x0B\x0C\x0E-\x1F￾￿]/g;
+function u_cellText(v){const s=u_xmlEsc(v);return U_XML_BAD.test(s)?s.replace(U_XML_BAD,""):s}
+function u_colLetter(n){let s="";while(n>0){const m=(n-1)%26;s=String.fromCharCode(65+m)+s;n=Math.floor((n-1)/26)}return s}
+function u_tick(){return new Promise(function(r){setTimeout(r,0)})}
+/* 单张 sheet 的 XML 分块生成器（格式与旧 sheetXml(sh(rows,widths,false,""),widths,false) 完全一致） */
+function* u_sheetXmlChunks(rows){
+  const XNS="http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+  const widths=[];
+  for(let i=0;i<rows.length;i++){
+    const r=rows[i];
+    for(let j=0;j<r.length;j++){if(!(j in r))continue;const v=String(r[j]==null?"":r[j]);const w=Math.min(Math.max(v.length*2+4,12),46);if(!widths[j]||w>widths[j])widths[j]=w}
+  }
+  const maxR=rows.length,maxC=widths.length;
+  let xml='<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<worksheet xmlns="'+XNS+'">';
+  if(maxR>0&&maxC>0)xml+='<dimension ref="A1:'+u_colLetter(maxC)+maxR+'"/>';
+  xml+='<sheetViews><sheetView tabSelected="1" workbookViewId="0"></sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/><cols>';
+  for(let i=0;i<widths.length;i++){const w=widths[i];if(w)xml+='<col min="'+(i+1)+'" max="'+(i+1)+'" width="'+w+'" customWidth="1"/>'}
+  xml+="</cols><sheetData>";
+  const letters=[];for(let j=0;j<maxC;j++)letters.push(u_colLetter(j+1));
+  for(let i=0;i<rows.length;i++){
+    const r=rows[i],rn=i+1;
+    let s='<row r="'+rn+'">';
+    for(let j=0;j<r.length;j++){
+      if(!(j in r))continue; // 与旧实现 Array.map/forEach 跳过空位一致
+      const v=r[j];
+      s+='<c r="'+(letters[j]||u_colLetter(j+1))+rn+'" t="inlineStr"><is><t xml:space="preserve">'+u_cellText(v==null?"":String(v))+"</t></is></c>";
+    }
+    xml+=s+"</row>";
+    if(xml.length>(1<<20)){yield xml;xml=""}
+  }
+  yield xml+"</sheetData></worksheet>";
+}
+/* 流式 ZIP：entries=[{name, chunks: Iterable<string>}]，返回 Blob */
+async function u_zipStream(entries,onProg){
+  const enc=new TextEncoder(),parts=[],central=[];
+  let offset=0,last=performance.now();
+  const canDeflate=typeof CompressionStream!=="undefined";
+  for(let ei=0;ei<entries.length;ei++){
+    const e=entries[ei],nameU8=enc.encode(e.name);
+    let crc=-1,usize=0,csize=0;const body=[];
+    let w=null,pump=null;
+    if(canDeflate){
+      const cs=new CompressionStream("deflate-raw");
+      w=cs.writable.getWriter();
+      const rd=cs.readable.getReader();
+      pump=(async function(){for(;;){const r=await rd.read();if(r.done)break;body.push(r.value);csize+=r.value.byteLength}})();
+    }
+    for(const s of e.chunks){
+      const u8=enc.encode(s);
+      crc=u_crc32(crc,u8);usize+=u8.length;
+      if(w)await w.write(u8);else{body.push(u8);csize+=u8.length}
+      if(performance.now()-last>30){if(onProg)onProg(ei,entries.length);await u_tick();last=performance.now()}
+    }
+    if(w){await w.close();await pump}
+    crc=(crc^-1)>>>0;
+    const method=w?8:0;
+    const lh=new Uint8Array(30+nameU8.length),dv=new DataView(lh.buffer);
+    dv.setUint32(0,0x04034b50,true);dv.setUint16(4,20,true);dv.setUint16(6,0,true);
+    dv.setUint16(8,method,true);dv.setUint16(10,0,true);dv.setUint16(12,0,true);
+    dv.setUint32(14,crc,true);dv.setUint32(18,csize,true);dv.setUint32(22,usize,true);
+    dv.setUint16(26,nameU8.length,true);dv.setUint16(28,0,true);
+    lh.set(nameU8,30);
+    central.push({name:nameU8,crc:crc,csize:csize,usize:usize,offset:offset,method:method});
+    parts.push(lh);for(let k=0;k<body.length;k++)parts.push(body[k]);
+    offset+=lh.length+csize;
+  }
+  let cdSize=0;
+  for(let i=0;i<central.length;i++){
+    const c=central[i],cd=new Uint8Array(46+c.name.length),dv=new DataView(cd.buffer);
+    dv.setUint32(0,0x02014b50,true);dv.setUint16(4,20,true);dv.setUint16(6,20,true);dv.setUint16(8,0,true);
+    dv.setUint16(10,c.method,true);dv.setUint16(12,0,true);dv.setUint16(14,0,true);
+    dv.setUint32(16,c.crc,true);dv.setUint32(20,c.csize,true);dv.setUint32(24,c.usize,true);
+    dv.setUint16(28,c.name.length,true);dv.setUint16(30,0,true);dv.setUint16(32,0,true);
+    dv.setUint16(34,0,true);dv.setUint16(36,0,true);dv.setUint32(38,0,true);
+    dv.setUint32(42,c.offset,true);
+    cd.set(c.name,46);parts.push(cd);cdSize+=cd.length;
+  }
+  const eocd=new Uint8Array(22),eDv=new DataView(eocd.buffer);
+  eDv.setUint32(0,0x06054b50,true);eDv.setUint16(8,central.length,true);eDv.setUint16(10,central.length,true);
+  eDv.setUint32(12,cdSize,true);eDv.setUint32(16,offset,true);eDv.setUint16(20,0,true);
+  parts.push(eocd);
+  return new Blob(parts,{type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+}
+/* 统一 xlsx 导出：sheets=[{name, rows:[[..]]}]（工作簿结构与旧 W_NEW_API.buildXlsx 一致） */
+async function u_buildXlsxBlob(sheets,onProg){
+  const XNS="http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+  const RNS="http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+  const PNS="http://schemas.openxmlformats.org/package/2006/relationships";
+  const sheetsTag=sheets.map(function(s,i){return '<sheet name="'+u_xmlEsc(s.name.replace(/[\[\]:*?\/\\]/g,"_").slice(0,31))+'" sheetId="'+(i+1)+'" r:id="rId'+(i+1)+'"/>'}).join("");
+  const relsTag=sheets.map(function(s,i){return '<Relationship Id="rId'+(i+1)+'" Type="'+RNS+'/worksheet" Target="worksheets/sheet'+(i+1)+'.xml"/>'}).join("");
+  const ctTag=sheets.map(function(s,i){return '<Override PartName="/xl/worksheets/sheet'+(i+1)+'.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'}).join("");
+  const fixed=[
+    ["[Content_Types].xml",'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'+ctTag+"</Types>"],
+    ["_rels/.rels",'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="'+PNS+'"><Relationship Id="rId1" Type="'+RNS+'/officeDocument" Target="xl/workbook.xml"/></Relationships>'],
+    ["xl/workbook.xml",'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="'+XNS+'" xmlns:r="'+RNS+'"><bookViews><workbookView visibility="visible" minimized="0" showHorizontalScroll="1" showVerticalScroll="1" showSheetTabs="1" tabRatio="600" firstSheet="0" activeTab="0" autoFilterDateGrouping="1"/></bookViews><sheets>'+sheetsTag+"</sheets></workbook>"],
+    ["xl/_rels/workbook.xml.rels",'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="'+PNS+'">'+relsTag+"</Relationships>"],
+    ["xl/styles.xml",'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="'+XNS+'"><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs></styleSheet>']
+  ];
+  const entries=fixed.map(function(f){return {name:f[0],chunks:[f[1]]}});
+  sheets.forEach(function(s,i){entries.push({name:"xl/worksheets/sheet"+(i+1)+".xml",chunks:u_sheetXmlChunks(s.rows||[])})});
+  return await u_zipStream(entries,onProg);
+}
+let u_exporting=false;
+async function u_exportXlsx(){
+  if(!u_result){u_err("请先完成分析");return}
+  if(u_exporting)return;
+  u_exporting=true;
+  const btn=u_$("btnExpX"),label=btn.innerHTML;
+  btn.disabled=true;btn.innerHTML="⏳ 正在生成 Excel…";
+  u_log("正在生成 Excel（流式写出，页面可继续操作）…");
+  try{
+    await u_tick();
+    const sheets=u_exportSheets();
+    const blob=await u_buildXlsxBlob(sheets,function(i,n){btn.innerHTML="⏳ 正在生成 Excel… "+Math.round(i/n*100)+"%"});
+    const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="warranty-report-"+u_stamp()+".xlsx";
+    document.body.appendChild(a);a.click();setTimeout(function(){URL.revokeObjectURL(a.href);a.remove()},2000);
+    u_log("Excel 导出完成（"+(blob.size/1048576).toFixed(1)+" MB）");
+  }catch(e){u_err("Excel 导出失败："+(e&&e.message||e));console.error(e)}
+  finally{u_exporting=false;btn.disabled=false;btn.innerHTML=label}
+}
 
 /* ======================= 内置演示 ======================= */
 function u_demo(kind){
@@ -5080,7 +5791,7 @@ function u_renderNewB(A){
     if(A.cascade&&A.cascade.length){
       parts.push('<h3 style="font-size:13px;color:var(--blue-dark);margin:4px 0 6px">非报价项级联（逐条码）</h3>');
       parts.push(u_table(["发货条码","产品COA","Offering名称","合同号","箱单号","备货单号","箱名","物料","父项","根","判定层级","级联预期","实际录入","状态","说明"],
-        A.cascade.map(function(r){
+        u_lazy(A.cascade,function(r){
           return {"发货条码":u_esc(r.bc),"产品COA":u_esc(r.coa),"Offering名称":u_esc(r.offering||""),"合同号":u_esc(r.contract||""),"箱单号":u_esc(r.box||""),"备货单号":u_esc(r.stock||""),"箱名":u_esc(r.boxName||""),
             "物料":u_esc(r.mat||""),"父项":u_esc(r.parent||""),"根":u_esc(r.root||""),"判定层级":u_esc(r.level||""),
             "级联预期":u_badge(r.expect,r.expect==="Y"?"y":"n"),"实际录入":u_esc(r.entered===1?"Y":(r.entered?"Y":"N")),
@@ -5091,7 +5802,7 @@ function u_renderNewB(A){
     if(A.unquoted&&A.unquoted.length){
       parts.push('<h3 style="font-size:13px;color:var(--blue-dark);margin:10px 0 6px">报价项(无报价)：报价项条码但报价行无对应报价 → 不应录入</h3>');
       parts.push(u_table(["发货条码","产品COA","Offering名称","物料","父项","根","实际录入","状态","说明"],
-        A.unquoted.map(function(r){
+        u_lazy(A.unquoted,function(r){
           return {"发货条码":u_esc(r.bc),"产品COA":u_esc(r.coa),"Offering名称":u_esc(r.offering||""),"物料":u_esc(r.mat||""),"父项":u_esc(r.parent||""),"根":u_esc(r.root||""),
             "实际录入":r.entered?"Y":"N","状态":u_badge(r.status==="ok"?"OK":r.status,r.status==="ok"?"y":"n"),"说明":u_esc(r.statusText||"") };
         }),function(r,i){return rowClsOf(A.unquoted[i].status)}));
@@ -5104,7 +5815,7 @@ function u_renderNewC(A){
   // 软件服务开始一致性
   if(A.swCheck&&A.swCheck.length){
     parts.push(u_table(["LAC码","产品COA","实际服务包","报价服务包","服务包匹配","实际开始","推导基准开始","开始匹配","说明"],
-      A.swCheck.map(function(x){
+      u_lazy(A.swCheck,function(x){
         return {"LAC码":u_esc(x.lac||""),"产品COA":u_esc(x.coa||""),"实际服务包":u_esc(x.svcPkg||""),"报价服务包":u_esc(x.expPkg||""),
           "服务包匹配":x.svcOk===true?"✓":(x.svcOk===false?"✗":"—"),
           "实际开始":u_esc(u_normDate(x.start)),"推导基准开始":x.expStart?u_esc(u_normDate(x.expStart)):"—",
@@ -5117,7 +5828,7 @@ function u_renderNewC(A){
 }
 function u_renderNewD(A){
   u_$("wrapD").innerHTML=u_table(["发货条码","COA","类别","物料编码","物料名称","父项条码","根条码","实际录入","状态"],
-    A.detail.map(function(r){
+    u_lazy(A.detail,function(r){
       return {"发货条码":u_esc(r.bc),"COA":u_esc(r.coa||""),"类别":u_badge(r.cat,r.cat==="报价项"?"y":(r.cat==="非报价项"?"m":(r.cat==="报价项(无报价)"?"w":"n"))),
         "物料编码":u_esc(r.mat||""),"物料名称":u_esc(r.matName||""),"父项条码":u_esc(r.parent||""),"根条码":u_esc(r.root||""),
         "实际录入":r.entered?"Y":"N","状态":u_esc(r.statusText||"") };
@@ -5168,13 +5879,11 @@ function u_renderRenewA(R){
 function u_renderRenewB(R){
   const A=R.A;
   const gv=(typeof A.gv==="function")?A.gv:function(){return ""};
-  /* 性能：12万+行发货明细若全量 map 生成对象再交给 u_table 截断，对象创建/GC 会卡死浏览器
-     → 与 u_table 截断上限一致，仅在前 U_TABLE_MAX 行做 map（统计为全量） */
+  /* 全量明细走虚拟滚动 + 惰性行源：只为可见行生成单元格 HTML（旧实现截断为前 20000 行） */
   const d=A.data||[];
-  const shown=d.length>U_TABLE_MAX?d.slice(0,U_TABLE_MAX):d;
-  const head='<div style="font-size:12.5px;margin-bottom:8px;line-height:1.9">级联判定明细：共 <b>'+d.length+'</b> 行'+(d.length>U_TABLE_MAX?'，仅显示前 <b>'+U_TABLE_MAX+'</b> 行（统计与导出为全量）':"")+'。</div>';
+  const head='<div style="font-size:12.5px;margin-bottom:8px;line-height:1.9">级联判定明细：共 <b>'+d.length+'</b> 行。</div>';
   u_$("wrapB").innerHTML=head+u_table(["发货条码","产品COA","Offering名称","判定","判定规则/原因","有效条码","软件","介质"],
-    shown.map(function(row,i){
+    u_lazy(d,function(row,i){
       const bc=String(row[A.colMap["发货条码"]]||"").trim();
       return {"发货条码":u_esc(bc),"产品COA":u_esc(gv(row,"产品COA")||gv(row,"COA")||""),"Offering名称":u_esc(gv(row,"Offering名称")||gv(row,"Offering 名称")||gv(row,"Offering")||""),
         "判定":u_badge(A.result[i]||"—",A.result[i]==="Y"?"y":(A.result[i]==="N"?"n":"m")),
@@ -5191,7 +5900,7 @@ function u_renderRenewC(R){
   const cntUq=rows.filter(function(r){return r.status==="unquoted"}).length;
   u_$("wrapC").innerHTML='<div style="font-size:12.5px;margin-bottom:8px;line-height:1.9">③ 软件LAC一致性：<b>已录入 '+cntOk+'</b> 条（续保SN清单已报价＋软件录入已录入）· <b>未录入 '+cntNo+'</b> 条（清单已报价但软件录入缺失）· <b>未报价 '+cntUq+'</b> 条（LAC不在续保SN清单软件服务包族中）。<span style="color:var(--muted)">判定基准=续保SN清单软件服务包族（88134UHK/ULA/UMJ/UJ 等 license/软件 服务）。</span></div>'
     +u_table(["LAC码","来源","服务包编码","产品COA","服务开始","服务结束","状态","说明"],
-    rows.map(function(r){
+    u_lazy(rows,function(r){
       return {"LAC码":u_esc(r.bc||""),"来源":u_esc(r.src||""),"服务包编码":u_esc(r.svcPkg||""),"产品COA":u_esc(r.coa||""),
         "服务开始":u_esc(r.start||""),"服务结束":u_esc(r.end||""),
         "状态":u_badge(stTxt[r.status]||r.status||"",r.status==="ok"?"y":(r.status==="missing"?"n":"w")),"说明":u_esc(r.note||"")};
@@ -5199,8 +5908,6 @@ function u_renderRenewC(R){
 }
 var u_cmpFilter="all"; // 实际录入比对筛选：all|missing|extra|mis|ok
 var u_cmpArr=[];       // 当前筛选桶（分桶缓存取出，切换筛选 O(1)，不再全量 filter）
-var u_cmpPage=0;       // 当前已展开页数（每页 CMP_PAGE 行）
-const CMP_PAGE=1000;   // 筛选明细每页行数：分批渲染 + 「显示更多」增量追加，避免一次性插入数万行 DOM 卡死
 const u_cmpStMap={"ok":"一致","mis":"字段不一致","missing":"缺录","extra":"多录","nobuy":"未购买维保"};
 /* ② 行样式：缺录/多录=红(n)，字段不一致/未购买维保=黄(w)，一致=绿(y) */
 function u_cmpRowCls(k){
@@ -5220,64 +5927,17 @@ function u_cmpBuckets(c){
   for(let i=0;i<b.all.length;i++){const k=b.all[i].kind;if(b[k])b[k].push(b.all[i])}
   c.buckets=b;return b;
 }
-/* 单行 HTML（与 u_table 首屏结构一致），供「显示更多」增量追加 */
-function u_cmpRowHtml(o){
-  return '<tr class="'+u_cmpRowCls(o.kind)+'">'
-    +'<td>'+u_badge(u_cmpStMap[o.kind]||o.kind,u_cmpBadgeType(o.kind))+'</td>'
-    +'<td>'+u_esc(o.bc||"")+'</td><td>'+u_esc(o.coa||"")+'</td><td>'+u_esc(o.offering||"")+'</td>'
-    +'<td>'+u_esc(o.svc||"")+'</td><td>'+u_esc(o.expStart||"")+'</td><td>'+u_esc(o.expEnd||"")+'</td>'
-    +'<td>'+u_esc(o.actStart||"")+'</td><td>'+u_esc(o.actEnd||"")+'</td><td>'+u_esc(o.detail||"")+'</td>'
-    +'</tr>';
-}
-/* 「显示更多」按钮条：当前已显示 x / 共 y */
-function u_cmpMoreBar(){
-  const arr=u_cmpArr||[];const cap=Math.min(arr.length,U_TABLE_MAX);
-  const shown=Math.min(arr.length,(u_cmpPage+1)*CMP_PAGE);
-  if(shown>=cap)return "";
-  return '<div style="padding:8px;text-align:center;margin-top:6px"><button type="button" id="cmpMoreBtn" style="background:#fff;color:var(--blue-dark);border:1px solid #c9d4e3;border-radius:4px;padding:5px 18px;font-size:12.5px;cursor:pointer">显示更多（已显示 '+shown+' / '+cap+' 条）</button></div>';
-}
-function u_cmpBindMore(){const m=u_$("cmpMoreBtn");if(m)m.addEventListener("click",function(){u_cmpAppendMore()})}
-/* 「显示更多」：只向已有 tbody 增量追加下一页行（insertAdjacentHTML），不重建已渲染 DOM → 大数据下每次追加耗时恒定 */
-function u_cmpAppendMore(){
-  const wrap=u_$("wrapBD");if(!wrap)return;
-  const arr=u_cmpArr||[];
-  const cap=Math.min(arr.length,U_TABLE_MAX);
-  const from=Math.min(cap,(u_cmpPage+1)*CMP_PAGE);
-  const to=Math.min(cap,from+CMP_PAGE);
-  if(to>from){
-    const tbody=wrap.querySelector&&wrap.querySelector("table tbody");
-    if(tbody){
-      let html="";
-      for(let i=from;i<to;i++){html+=u_cmpRowHtml(arr[i])}
-      tbody.insertAdjacentHTML("beforeend",html);
-    }
-    u_cmpPage++;
-  }
-  /* 重建更多按钮区（仅一个小 div，代价可忽略） */
-  const olds=wrap.querySelectorAll?wrap.querySelectorAll("#cmpMoreRowWrap"):[];
-  for(let i=0;i<olds.length;i++){olds[i].parentNode&&olds[i].parentNode.removeChild(olds[i])}
-  const bar=u_cmpMoreBar();
-  if(bar)wrap.insertAdjacentHTML("beforeend",'<div id="cmpMoreRowWrap">'+bar+'</div>');
-  u_cmpBindMore();
-}
-/* 渲染表格区（当前筛选 + 首屏 CMP_PAGE 行 + 更多按钮）；表格 HTML 直接并入 wrapBD 一次性生成 */
-function u_cmpTableHtml(){
-  const arr=u_cmpArr||[];
+/* 筛选桶 → 表格（大桶自动虚拟滚动，全量可查看；旧实现为每页 1000 行「显示更多」且上限 20000 行） */
+function u_cmpTableHtml(arr){
+  arr=arr||[];
   if(!arr.length)return '<div style="padding:14px;color:var(--muted)">— 该筛选下无记录 —</div>';
-  let html="";
-  if(arr.length>U_TABLE_MAX){
-    html+='<div style="padding:8px 12px;margin:6px 0;font-size:12.5px;color:#8a6d1d;background:#fff8e1;border:1px solid #f0d9a0;border-radius:4px">⚠️ 该筛选共 <b>'+arr.length+'</b> 条，最多展示前 <b>'+U_TABLE_MAX+'</b> 条（统计与导出为全量）。</div>';
-  }
-  const limit=Math.min(arr.length,CMP_PAGE);
-  html+=u_table(["类型","条码","产品COA","Offering名称","服务包","预期开始","预期结束","实际开始","实际结束","说明"],
-    arr.slice(0,limit).map(function(o){
+  return u_table(["类型","条码","产品COA","Offering名称","服务包","预期开始","预期结束","实际开始","实际结束","说明"],
+    u_lazy(arr,function(o){
       return {"类型":u_badge(u_cmpStMap[o.kind]||o.kind,u_cmpBadgeType(o.kind)),
         "条码":u_esc(o.bc||""),"产品COA":u_esc(o.coa||""),"Offering名称":u_esc(o.offering||""),"服务包":u_esc(o.svc||""),
         "预期开始":u_esc(o.expStart||""),"预期结束":u_esc(o.expEnd||""),
         "实际开始":u_esc(o.actStart||""),"实际结束":u_esc(o.actEnd||""),"说明":u_esc(o.detail||"")};
-    }),function(r,i){return u_cmpRowCls(arr[i].kind)})
-    +'<div id="cmpMoreRowWrap">'+u_cmpMoreBar()+'</div>';
-  return html;
+    }),function(r,i){return u_cmpRowCls(arr[i].kind)});
 }
 /* 实际录入比对 通用渲染：统计条（一致/字段不一致/缺录/多录）+ 筛选按钮 + 分页明细。
    供 续签②（u_renderRenewD）与新签②（u_renderNew）共用；输出到 wrapBD + tabBDivider */
@@ -5298,14 +5958,13 @@ function u_renderCmpBody(R){
     const on=k[0]===u_cmpFilter;
     return '<button type="button" data-f="'+k[0]+'" style="'+(on?'background:var(--blue);color:#fff;border:1px solid var(--blue)':'background:#fff;color:var(--blue-dark);border:1px solid #c9d4e3')+';border-radius:4px;padding:2px 10px;font-size:12px;cursor:pointer">'+k[1]+'</button>';
   }).join("");
-  /* 分桶缓存 + 重置分页：筛选切换只重建表格（首屏 CMP_PAGE 行），「显示更多」增量追加 */
+  /* 分桶缓存：筛选切换只重建表格（虚拟滚动，任意行数恒定开销） */
   const buckets=u_cmpBuckets(c);
   u_cmpArr=u_cmpFilter==="all"?buckets.all:(buckets[u_cmpFilter]||[]);
-  u_cmpPage=0;
   u_$("wrapBD").innerHTML='<div style="font-size:12.5px;margin-bottom:8px;display:flex;flex-wrap:wrap;align-items:center;gap:8px;line-height:1.9">'
     +'<b>② 实际录入比对：</b>'+stHtml
     +'<span style="flex:1"></span><span>筛选：</span>'+fHtml
-    +'</div>'+u_cmpTableHtml();
+    +'</div>'+u_cmpTableHtml(u_cmpArr);
   const btns=u_$("wrapBD").querySelectorAll?u_$("wrapBD").querySelectorAll("button[data-f]"):[];
   if(btns&&btns.forEach)btns.forEach(function(b){
     b.addEventListener("click",function(){
@@ -5313,7 +5972,6 @@ function u_renderCmpBody(R){
       u_renderCmpBody(R);
     });
   });
-  u_cmpBindMore();
 }
 function u_renderRenewD(R){
   u_$("tabD").style.display="none"; // 录入比对已并入 ② 级联判定 Tab
